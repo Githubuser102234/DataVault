@@ -118,7 +118,7 @@
 
     <!-- Feature 2: Content Preview MODAL -->
     <div id="content-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 hidden flex items-center justify-center p-4" onclick="closeModal(event)">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden" onclick="event.stopPropagation()">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden" onclick="event.stopPropagation()">
             <div class="p-6 border-b border-gray-200 flex justify-between items-center">
                 <h3 id="modal-title" class="text-xl font-bold text-gray-800 truncate">Content Preview</h3>
                 <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
@@ -126,12 +126,26 @@
                 </button>
             </div>
             <div class="p-6 overflow-y-auto max-h-[70vh]">
-                <pre id="modal-content-preview" class="p-3 bg-gray-100 rounded-lg text-sm font-mono whitespace-pre-wrap break-all overflow-auto max-h-[60vh]">Loading content...</pre>
+                <!-- NEW MEDIA CONTAINER: Image/Video/Audio preview -->
+                <div id="modal-media-container" class="mb-4 flex justify-center max-h-[40vh] overflow-hidden rounded-lg border border-gray-300 p-2 bg-gray-100 hidden">
+                    <!-- Media (img/video) will be inserted here -->
+                </div>
+
+                <div id="modal-content-details">
+                    <div class="text-xs font-semibold text-gray-700 mb-2">
+                        Raw Content / Base64 String:
+                    </div>
+                    <pre id="modal-content-preview" class="p-3 bg-gray-100 rounded-lg text-sm font-mono whitespace-pre-wrap break-all overflow-auto max-h-[25vh]">Loading content...</pre>
+                </div>
+
                 <div id="modal-file-info" class="mt-4 text-sm text-gray-600"></div>
             </div>
-            <div class="p-4 border-t border-gray-200 flex justify-end gap-2">
+            <div class="p-4 border-t border-gray-200 flex justify-between items-center gap-2">
+                <button id="modal-share-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
+                    Copy Share Link
+                </button>
                 <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
-                    Copy Content
+                    Copy Raw Content
                 </button>
             </div>
         </div>
@@ -160,6 +174,7 @@
             onSnapshot, 
             deleteDoc, 
             doc,
+            getDoc, // Added for direct URL loading
             query,
             getDocs,
             setDoc,
@@ -170,7 +185,6 @@
 
         // --- GLOBAL SETUP & FIREBASE INITIALIZATION ---
 
-        // Your web app's Firebase configuration (provided by user)
         const firebaseConfig = {
             apiKey: "AIzaSyC4dWBM-Sny6PGuPDa_oeOj7dfOBgaoB2c",
             authDomain: "datavault-e4ce1.firebaseapp.com",
@@ -185,14 +199,14 @@
         const analytics = getAnalytics(app); 
         const db = getFirestore(app);
         const auth = getAuth(app);
-        setLogLevel('debug'); // Enable Firestore logging
+        setLogLevel('debug'); 
 
         // Global state for application
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         let userId = null;
         let currentUploadType = 'text';
         let savedItems = [];      // Holds all fetched items from Firestore
-        let currentFilter = 'all'; // 'all', 'text', or 'file'
+        let currentFilter = 'all'; 
         const CHUNK_SIZE = 500 * 1024; // 500 KB limit per chunk
 
         // --- UTILITY FUNCTIONS ---
@@ -202,7 +216,6 @@
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = () => {
-                    // Extract the Base64 part (after the mimeType prefix)
                     const base64Content = reader.result.split(',')[1];
                     resolve({ base64Content, mimeType: file.type || 'application/octet-stream' });
                 };
@@ -225,15 +238,27 @@
         window.closeModal = (event) => { // Made global for onclick in HTML
             if (!event || event.currentTarget.id === 'content-modal' || !event.currentTarget.id) {
                 document.getElementById('content-modal').classList.add('hidden');
+                // Clean up URL parameter when closing the modal, without reloading the page
+                if (window.history.replaceState) {
+                    const url = new URL(window.location.href);
+                    if (url.searchParams.has('fileid')) {
+                        url.searchParams.delete('fileid');
+                        window.history.replaceState(null, '', url.toString());
+                    }
+                }
             }
+        };
+
+        // NEW: Function to get file ID from URL parameter
+        const getFileIdFromUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('fileid');
         };
 
         // --- FIRESTORE DATA CHUNKING AND ASSEMBLY LOGIC ---
 
-        // Helper to get the user's specific files collection reference
         const getUserCollectionRef = () => {
             if (!userId) throw new Error("User not authenticated.");
-            // Path: /artifacts/{appId}/users/{userId}/files
             return collection(db, `artifacts/${appId}/users/${userId}/files`);
         };
 
@@ -242,7 +267,6 @@
             const isLarge = content.length > CHUNK_SIZE;
             const numChunks = Math.ceil(content.length / CHUNK_SIZE);
 
-            // 1. Save Metadata to the parent document
             const filesCollectionRef = getUserCollectionRef();
             const docRef = await addDoc(filesCollectionRef, {
                 type: data.type,
@@ -253,11 +277,9 @@
                 createdAt: Date.now(),
             });
             
-            // 2. Save all content (chunked or not) to the 'chunks' subcollection
             const chunkPromises = [];
             for (let i = 0; i < numChunks; i++) {
                 const chunk = content.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                // Create a reference to the chunk document
                 const chunkDocRef = doc(db, docRef.path, 'chunks', i.toString());
                 
                 chunkPromises.push(setDoc(chunkDocRef, { index: i, content: chunk }));
@@ -268,9 +290,9 @@
         };
 
         const fetchContentAndReconstruct = async (docId) => {
+            // This function relies on userId being set globally
             const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
             
-            // Order by index to ensure chunks are assembled in the correct sequence
             const q = query(chunksRef, orderBy("index"));
             const chunkSnapshot = await getDocs(q);
 
@@ -281,9 +303,7 @@
 
             if (chunks.length === 0) throw new Error("Content chunks not found or inaccessible.");
 
-            // Combine to get the full Base64 string
             const fullContent = chunks.map(c => c.content).join('');
-            
             return fullContent;
         };
         
@@ -292,7 +312,7 @@
             if (!isConfirmed) return;
 
             try {
-                // Delete Chunks first (optional but safer)
+                // Delete Chunks
                 const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
                 const chunkSnapshot = await getDocs(chunksRef);
                 const deleteChunkPromises = [];
@@ -311,9 +331,123 @@
             }
         };
 
+        // --- NEW: CONTENT LOADING AND MODAL RENDERING ---
+
+        const loadContentAndOpenModal = async (docId, filename, mimeType, elementToUpdate = null) => {
+            const isText = mimeType.includes('text/plain');
+            
+            // Set loading state on the element that triggered the action
+            if (elementToUpdate) {
+                elementToUpdate.textContent = 'Loading...';
+                elementToUpdate.disabled = true;
+                elementToUpdate.classList.remove('hover:bg-indigo-100');
+            }
+
+            const modalTitle = document.getElementById('modal-title');
+            const modalPreview = document.getElementById('modal-content-preview');
+            const modalInfo = document.getElementById('modal-file-info');
+            const modalCopyBtn = document.getElementById('modal-copy-btn');
+            const modalShareBtn = document.getElementById('modal-share-btn');
+            const mediaContainer = document.getElementById('modal-media-container');
+
+            modalTitle.textContent = filename;
+            modalPreview.textContent = 'Fetching and reassembling content chunks...';
+            modalInfo.textContent = '';
+            mediaContainer.innerHTML = '';
+            mediaContainer.classList.add('hidden');
+
+            try {
+                const fullContent = await fetchContentAndReconstruct(docId);
+                const dataUri = `data:${mimeType};base64,${fullContent}`;
+                
+                // Determine content for display/copy
+                const contentToDisplay = isText ? atob(fullContent) : fullContent;
+
+                // --- Media Rendering (Image/Video) ---
+                if (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+                    mediaContainer.classList.remove('hidden');
+                    let mediaElement;
+                    
+                    if (mimeType.startsWith('image/')) {
+                        mediaElement = document.createElement('img');
+                        mediaElement.className = 'max-w-full max-h-[35vh] object-contain rounded-lg shadow-md';
+                        mediaElement.alt = filename;
+                    } else if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+                        mediaElement = document.createElement(mimeType.startsWith('video/') ? 'video' : 'audio');
+                        mediaElement.controls = true;
+                        mediaElement.autoplay = false;
+                        mediaElement.loop = false;
+                        mediaElement.className = 'w-full max-h-[35vh] object-contain rounded-lg shadow-md';
+                    }
+
+                    if (mediaElement) {
+                        mediaElement.src = dataUri;
+                        mediaContainer.appendChild(mediaElement);
+                    }
+                }
+
+                // 2. Populate Modal (Raw Content View)
+                modalPreview.textContent = contentToDisplay;
+                
+                // 3. Populate Info
+                modalInfo.innerHTML = `
+                    Type: <strong>${mimeType}</strong> | 
+                    Base64 Length: <strong>${(contentToDisplay.length / 1024).toFixed(2)} KB</strong> 
+                    ${fullContent.length > CHUNK_SIZE ? '<span class="text-orange-600 font-semibold">(Stored in Chunks)</span>' : ''}
+                `;
+
+                // 4. Set up copy handlers
+                modalCopyBtn.textContent = isText ? 'Copy Text/Code' : 'Copy Base64';
+                modalCopyBtn.onclick = () => {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = contentToDisplay;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = 0;
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    
+                    modalCopyBtn.textContent = "Copied!";
+                    setTimeout(() => modalCopyBtn.textContent = isText ? 'Copy Text/Code' : 'Copy Base64', 1500);
+                };
+
+                // 5. Set up Share link copy
+                const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${docId}`;
+                modalShareBtn.onclick = () => {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = shareLink;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = 0;
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    
+                    modalShareBtn.textContent = "Link Copied!";
+                    setTimeout(() => modalShareBtn.textContent = "Copy Share Link", 1500);
+                };
+
+                openModal();
+
+            } catch (error) {
+                console.error("Error loading content:", error);
+                modalPreview.textContent = `ERROR: Failed to load content. ${error.message}. Ensure the file ID is correct and you are signed in to the correct account.`;
+                modalInfo.textContent = '';
+                mediaContainer.classList.add('hidden');
+            } finally {
+                if (elementToUpdate) {
+                    elementToUpdate.textContent = 'View / Copy';
+                    elementToUpdate.disabled = false;
+                    elementToUpdate.classList.add('hover:bg-indigo-100');
+                }
+            }
+        };
+
         // --- UI RENDERING FUNCTIONS ---
 
-        // Fix: Toggles the save button state based on text input content
         const toggleSaveButton = () => {
             const saveBtn = document.getElementById('save-btn');
             const isTextTab = currentUploadType === 'text';
@@ -326,7 +460,7 @@
                     shouldBeDisabled = false;
                 }
             } else { 
-                // For file upload, we allow the button to be active and rely on browser 'required' validation
+                // For file upload, we rely on the input being present, enabling the button allows file selection
                 shouldBeDisabled = false;
             }
 
@@ -344,6 +478,9 @@
             const formattedDate = new Date(item.createdAt).toLocaleString();
             const typeLabel = item.type === 'text' ? 'Paste' : 'File';
             const typeColor = item.type === 'text' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700';
+            
+            // Generate the direct link to the file for easy copying
+            const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${item.id}`;
 
             const card = document.createElement('div');
             card.className = 'bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between';
@@ -372,8 +509,9 @@
                         data-mimetype="${item.mimeType}">
                         View / Copy
                     </button>
-                    <a href="#" class="download-link hidden flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
-                        Download
+                    <!-- Link to open the file directly via URL -->
+                    <a href="${shareLink}" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="Open in new window">
+                        Open Link
                     </a>
                     <button class="delete-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
                         data-id="${item.id}" 
@@ -389,74 +527,9 @@
             });
 
             const loadBtn = card.querySelector('.load-content-btn');
-            const downloadLink = card.querySelector('.download-link');
             
-            // Feature: Open Modal on click
             loadBtn.addEventListener('click', async () => {
-                loadBtn.textContent = 'Loading...';
-                loadBtn.disabled = true;
-                loadBtn.classList.remove('hover:bg-indigo-100');
-
-                const modalTitle = document.getElementById('modal-title');
-                const modalPreview = document.getElementById('modal-content-preview');
-                const modalInfo = document.getElementById('modal-file-info');
-                const modalCopyBtn = document.getElementById('modal-copy-btn');
-                
-                modalPreview.textContent = 'Fetching and reassembling content chunks...';
-                modalInfo.textContent = '';
-                modalCopyBtn.textContent = 'Copy Content';
-
-                try {
-                    // 1. Fetch and reconstruct the full Base64 content
-                    const fullContent = await fetchContentAndReconstruct(item.id);
-                    const dataUri = `data:${item.mimeType};base64,${fullContent}`;
-                    
-                    // Decode to text if it's plain text for proper display/copying, otherwise use raw Base64
-                    const contentToDisplay = item.type === 'text' && item.mimeType.includes('text/plain') ? atob(fullContent) : fullContent;
-
-                    // 2. Populate Modal
-                    modalTitle.textContent = item.filename;
-                    modalPreview.textContent = contentToDisplay;
-                    
-                    modalInfo.innerHTML = `
-                        Type: <strong>${item.mimeType}</strong> | 
-                        Base64 Length: <strong>${(contentToDisplay.length / 1024).toFixed(2)} KB</strong> 
-                        ${item.isChunked ? '<span class="text-orange-600 font-semibold">(Stored in Chunks)</span>' : ''}
-                    `;
-
-                    // 3. Set up download link
-                    downloadLink.href = dataUri;
-                    downloadLink.download = item.filename;
-                    downloadLink.textContent = item.type === 'text' ? 'Download Text' : 'Download File';
-                    downloadLink.classList.remove('hidden');
-
-                    // 4. Attach copy handler inside the modal
-                    modalCopyBtn.onclick = () => {
-                        // Copy logic (using hidden textarea)
-                        const textarea = document.createElement('textarea');
-                        textarea.value = contentToDisplay;
-                        textarea.style.position = 'fixed';
-                        textarea.style.opacity = 0;
-                        document.body.appendChild(textarea);
-                        textarea.focus();
-                        textarea.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(textarea);
-                        
-                        modalCopyBtn.textContent = "Copied!";
-                        setTimeout(() => modalCopyBtn.textContent = "Copy Content", 1500);
-                    };
-
-                    openModal();
-
-                } catch (error) {
-                    console.error("Error loading content:", error);
-                    modalPreview.textContent = `ERROR: Failed to load content. ${error.message}`;
-                } finally {
-                    loadBtn.textContent = 'View / Copy';
-                    loadBtn.disabled = false;
-                    loadBtn.classList.add('hover:bg-indigo-100');
-                }
+                loadContentAndOpenModal(item.id, item.filename, item.mimeType, loadBtn);
             });
 
             return card;
@@ -466,7 +539,6 @@
             const listContainer = document.getElementById('item-list');
             const emptyState = document.getElementById('empty-state');
             
-            // Feature: Apply client-side filter
             const filteredItems = items.filter(item => {
                 if (currentFilter === 'all') return true;
                 return item.type === currentFilter;
@@ -489,13 +561,10 @@
         };
 
         const attachFormListeners = () => {
-            // Attach input listener for the text field (BUG FIX)
             const textInput = document.getElementById('paste-text');
             if (textInput) {
                 textInput.addEventListener('input', toggleSaveButton);
             }
-            
-            // Run initial check
             toggleSaveButton();
         };
 
@@ -518,11 +587,31 @@
                 `;
                 fileInfo.classList.remove('hidden');
             }
-            // Re-attach listeners every time the form fields are re-rendered
             attachFormListeners();
         };
 
         // --- AUTHENTICATION FLOWS ---
+
+        // NEW: Load the file specified in the URL after successful authentication
+        const loadFromUrlIfPresent = async () => {
+            const fileId = getFileIdFromUrl();
+            if (fileId) {
+                try {
+                    const docRef = doc(db, `artifacts/${appId}/users/${userId}/files`, fileId);
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const item = { id: docSnap.id, ...docSnap.data() };
+                        loadContentAndOpenModal(item.id, item.filename, item.mimeType);
+                    } else {
+                        showMessage('auth-message', `File ID "${fileId}" not found or inaccessible.`, true);
+                    }
+                } catch (error) {
+                    console.error("Error loading file from URL:", error);
+                    showMessage('auth-message', `Error fetching file: ${error.message}`, true);
+                }
+            }
+        }
 
         const handleAuthStateChanged = (user) => {
             const authContainer = document.getElementById('auth-container');
@@ -543,15 +632,21 @@
                 authContainer.classList.add('hidden');
                 mainApp.classList.remove('hidden');
                 attachDataListener();
+                
+                // IMPORTANT: Check URL for fileid and load content instantly
+                loadFromUrlIfPresent(); 
+
             } else {
                 userId = null;
                 authStatus.textContent = 'Please sign in to access your vault.';
                 authContainer.classList.remove('hidden');
                 mainApp.classList.add('hidden');
-                savedItems = []; // Clear global state
-                renderItemList([]); // Clear the list
+                savedItems = []; 
+                renderItemList([]); 
             }
         };
+
+        // ... (handleGoogleSignIn, handleEmailAuth, handleSignOut remain unchanged)
 
         const handleGoogleSignIn = async () => {
             document.getElementById('auth-message').classList.add('hidden');
@@ -620,8 +715,8 @@
                         fetchedItems.push({ id: doc.id, ...doc.data() });
                     });
                     
-                    savedItems = fetchedItems; // Update global state
-                    renderItemList(savedItems); // Render using the new data and current filter
+                    savedItems = fetchedItems;
+                    renderItemList(savedItems);
                 }, (error) => {
                     console.error("Error listening to Firestore snapshot:", error);
                     document.getElementById('empty-state').textContent = `Error loading data: ${error.message}`;
@@ -673,7 +768,7 @@
                     
                     document.getElementById('paste-text').value = '';
                     document.getElementById('paste-title').value = '';
-                    toggleSaveButton(); // Re-check button state after clearing form
+                    toggleSaveButton();
 
                 } else if (currentUploadType === 'file') {
                     const fileInput = document.getElementById('file-upload');
@@ -689,7 +784,6 @@
                         mimeType: mimeType,
                     };
                     
-                    // Clear file input
                     fileInput.value = ''; 
                     document.getElementById('file-info').textContent = '';
                 }
@@ -704,7 +798,6 @@
                 showMessage('save-message', `Error: ${error.message}`, true);
             } finally {
                 saveBtn.textContent = `Save ${currentUploadType === 'text' ? 'Paste' : 'File'}`;
-                // Re-enable button based on the current state (important for file tab which is usually enabled)
                 toggleSaveButton();
             }
         };
@@ -712,22 +805,18 @@
         // --- INITIALIZATION ---
         
         window.onload = () => {
-            // 1. Initial UI setup
-            renderFormFields(); // Renders fields and attaches input listener for save button fix
+            renderFormFields();
 
-            // 2. Attach UI listeners
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', handleTabClick);
             });
             document.getElementById('content-form').addEventListener('submit', handleFormSubmit);
 
-            // Feature: Filter listener
             document.getElementById('filter-type').addEventListener('change', (e) => {
                 currentFilter = e.target.value;
                 renderItemList(savedItems);
             });
 
-            // File size info update for visual feedback
             document.addEventListener('change', (e) => {
                 if (e.target.id === 'file-upload' && e.target.files.length > 0) {
                     const file = e.target.files[0];
@@ -738,12 +827,10 @@
                 }
             });
 
-            // 3. Attach Auth listeners
             document.getElementById('google-signin-btn').addEventListener('click', handleGoogleSignIn);
             document.getElementById('signin-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(false); });
             document.getElementById('signup-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(true); });
             
-            // 4. Start authentication listener
             onAuthStateChanged(auth, handleAuthStateChanged);
         };
     </script>
