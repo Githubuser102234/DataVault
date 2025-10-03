@@ -8,14 +8,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Custom scrollbar for the textarea and card content for aesthetics */
-        textarea::-webkit-scrollbar, .content-container::-webkit-scrollbar {
+        textarea::-webkit-scrollbar, .content-container::-webkit-scrollbar, pre::-webkit-scrollbar {
             width: 8px;
         }
-        textarea::-webkit-scrollbar-thumb, .content-container::-webkit-scrollbar-thumb {
+        textarea::-webkit-scrollbar-thumb, .content-container::-webkit-scrollbar-thumb, pre::-webkit-scrollbar-thumb {
             background-color: #a5b4fc; /* Indigo-300 */
             border-radius: 4px;
         }
-        textarea::-webkit-scrollbar-track, .content-container::-webkit-scrollbar-track {
+        textarea::-webkit-scrollbar-track, .content-container::-webkit-scrollbar-track, pre::-webkit-scrollbar-track {
             background-color: #f3f4f6; /* Gray-100 */
         }
     </style>
@@ -96,11 +96,43 @@
             <!-- Saved Items List -->
             <div class="pt-4">
                 <h2 class="text-2xl font-bold text-gray-800 mb-4">Your Saved Items (<span id="item-count">0</span>)</h2>
+
+                <!-- Feature 1: Filter Dropdown -->
+                <div class="flex justify-end mb-3">
+                    <label for="filter-type" class="mr-2 text-sm font-medium text-gray-700 self-center">Filter by Type:</label>
+                    <select id="filter-type" class="p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="all">All Items</option>
+                        <option value="text">Text/Code Pastes</option>
+                        <option value="file">Uploaded Files</option>
+                    </select>
+                </div>
+                
                 <div id="item-list" class="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-2">
                     <div id="empty-state" class="p-10 text-center bg-white rounded-xl shadow-md text-gray-500 col-span-full">
                         Loading your saved items...
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feature 2: Content Preview MODAL -->
+    <div id="content-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 hidden flex items-center justify-center p-4" onclick="closeModal(event)">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h3 id="modal-title" class="text-xl font-bold text-gray-800 truncate">Content Preview</h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto max-h-[70vh]">
+                <pre id="modal-content-preview" class="p-3 bg-gray-100 rounded-lg text-sm font-mono whitespace-pre-wrap break-all overflow-auto max-h-[60vh]">Loading content...</pre>
+                <div id="modal-file-info" class="mt-4 text-sm text-gray-600"></div>
+            </div>
+            <div class="p-4 border-t border-gray-200 flex justify-end gap-2">
+                <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                    Copy Content
+                </button>
             </div>
         </div>
     </div>
@@ -150,17 +182,17 @@
         };
 
         const app = initializeApp(firebaseConfig);
-        // Initialize Analytics (as provided in the SDK)
         const analytics = getAnalytics(app); 
         const db = getFirestore(app);
         const auth = getAuth(app);
         setLogLevel('debug'); // Enable Firestore logging
 
-        // Global variables provided by the Canvas environment (used for private data path)
+        // Global state for application
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        
         let userId = null;
         let currentUploadType = 'text';
+        let savedItems = [];      // Holds all fetched items from Firestore
+        let currentFilter = 'all'; // 'all', 'text', or 'file'
         const CHUNK_SIZE = 500 * 1024; // 500 KB limit per chunk
 
         // --- UTILITY FUNCTIONS ---
@@ -187,6 +219,14 @@
                 setTimeout(() => el.classList.add('hidden'), 5000);
             }
         };
+        
+        // Modal functions
+        const openModal = () => document.getElementById('content-modal').classList.remove('hidden');
+        window.closeModal = (event) => { // Made global for onclick in HTML
+            if (!event || event.currentTarget.id === 'content-modal' || !event.currentTarget.id) {
+                document.getElementById('content-modal').classList.add('hidden');
+            }
+        };
 
         // --- FIRESTORE DATA CHUNKING AND ASSEMBLY LOGIC ---
 
@@ -197,10 +237,6 @@
             return collection(db, `artifacts/${appId}/users/${userId}/files`);
         };
 
-        /**
-         * Saves content, chunking it if the Base64 string exceeds CHUNK_SIZE.
-         * @param {Object} data - { type, filename, content }
-         */
         const saveContent = async (data) => {
             const content = data.content;
             const isLarge = content.length > CHUNK_SIZE;
@@ -231,11 +267,6 @@
             return docRef.id;
         };
 
-        /**
-         * Fetches all chunks for a document and reassembles the original Base64 string.
-         * @param {string} docId - The ID of the parent document.
-         * @returns {string} The full reassembled Base64 content.
-         */
         const fetchContentAndReconstruct = async (docId) => {
             const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
             
@@ -256,9 +287,6 @@
             return fullContent;
         };
         
-        /**
-         * Deletes the parent document AND all its chunks.
-         */
         const deleteContent = async (docId, filename) => {
             const isConfirmed = window.confirm(`Are you sure you want to delete '${filename}'? This cannot be undone.`);
             if (!isConfirmed) return;
@@ -284,6 +312,33 @@
         };
 
         // --- UI RENDERING FUNCTIONS ---
+
+        // Fix: Toggles the save button state based on text input content
+        const toggleSaveButton = () => {
+            const saveBtn = document.getElementById('save-btn');
+            const isTextTab = currentUploadType === 'text';
+            
+            let shouldBeDisabled = true;
+            
+            if (isTextTab) {
+                const textInput = document.getElementById('paste-text');
+                if (textInput && textInput.value.trim().length > 0) {
+                    shouldBeDisabled = false;
+                }
+            } else { 
+                // For file upload, we allow the button to be active and rely on browser 'required' validation
+                shouldBeDisabled = false;
+            }
+
+            saveBtn.disabled = shouldBeDisabled;
+            if (shouldBeDisabled) {
+                saveBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+                saveBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+            } else {
+                saveBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                saveBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+            }
+        };
 
         const renderItemCard = (item) => {
             const formattedDate = new Date(item.createdAt).toLocaleString();
@@ -336,43 +391,69 @@
             const loadBtn = card.querySelector('.load-content-btn');
             const downloadLink = card.querySelector('.download-link');
             
+            // Feature: Open Modal on click
             loadBtn.addEventListener('click', async () => {
                 loadBtn.textContent = 'Loading...';
                 loadBtn.disabled = true;
                 loadBtn.classList.remove('hover:bg-indigo-100');
 
+                const modalTitle = document.getElementById('modal-title');
+                const modalPreview = document.getElementById('modal-content-preview');
+                const modalInfo = document.getElementById('modal-file-info');
+                const modalCopyBtn = document.getElementById('modal-copy-btn');
+                
+                modalPreview.textContent = 'Fetching and reassembling content chunks...';
+                modalInfo.textContent = '';
+                modalCopyBtn.textContent = 'Copy Content';
+
                 try {
                     // 1. Fetch and reconstruct the full Base64 content
                     const fullContent = await fetchContentAndReconstruct(item.id);
                     const dataUri = `data:${item.mimeType};base64,${fullContent}`;
+                    
+                    // Decode to text if it's plain text for proper display/copying, otherwise use raw Base64
+                    const contentToDisplay = item.type === 'text' && item.mimeType.includes('text/plain') ? atob(fullContent) : fullContent;
 
-                    // 2. Set up download link
+                    // 2. Populate Modal
+                    modalTitle.textContent = item.filename;
+                    modalPreview.textContent = contentToDisplay;
+                    
+                    modalInfo.innerHTML = `
+                        Type: <strong>${item.mimeType}</strong> | 
+                        Base64 Length: <strong>${(contentToDisplay.length / 1024).toFixed(2)} KB</strong> 
+                        ${item.isChunked ? '<span class="text-orange-600 font-semibold">(Stored in Chunks)</span>' : ''}
+                    `;
+
+                    // 3. Set up download link
                     downloadLink.href = dataUri;
                     downloadLink.download = item.filename;
                     downloadLink.textContent = item.type === 'text' ? 'Download Text' : 'Download File';
                     downloadLink.classList.remove('hidden');
 
-                    // 3. Copy the content (Base64 or raw text if mime is text/plain)
-                    // The atob function is used to convert Base64 back to raw text for copying if it's plain text.
-                    const contentToCopy = item.type === 'text' && item.mimeType.includes('text/plain') ? atob(fullContent) : fullContent;
-                    
-                    const textarea = document.createElement('textarea');
-                    textarea.value = contentToCopy;
-                    textarea.style.position = 'fixed';
-                    textarea.style.opacity = 0;
-                    document.body.appendChild(textarea);
-                    textarea.focus();
-                    textarea.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(textarea);
+                    // 4. Attach copy handler inside the modal
+                    modalCopyBtn.onclick = () => {
+                        // Copy logic (using hidden textarea)
+                        const textarea = document.createElement('textarea');
+                        textarea.value = contentToDisplay;
+                        textarea.style.position = 'fixed';
+                        textarea.style.opacity = 0;
+                        document.body.appendChild(textarea);
+                        textarea.focus();
+                        textarea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textarea);
+                        
+                        modalCopyBtn.textContent = "Copied!";
+                        setTimeout(() => modalCopyBtn.textContent = "Copy Content", 1500);
+                    };
 
-                    alert(`Content copied to clipboard!\n${item.isChunked ? '(Note: Copied Base64 string from chunks)' : ''}`);
+                    openModal();
 
                 } catch (error) {
                     console.error("Error loading content:", error);
-                    alert(`Error loading content: ${error.message}`);
+                    modalPreview.textContent = `ERROR: Failed to load content. ${error.message}`;
                 } finally {
-                    loadBtn.textContent = 'Content Loaded (Copied)';
+                    loadBtn.textContent = 'View / Copy';
                     loadBtn.disabled = false;
                     loadBtn.classList.add('hover:bg-indigo-100');
                 }
@@ -384,19 +465,38 @@
         const renderItemList = (items) => {
             const listContainer = document.getElementById('item-list');
             const emptyState = document.getElementById('empty-state');
-            document.getElementById('item-count').textContent = items.length;
+            
+            // Feature: Apply client-side filter
+            const filteredItems = items.filter(item => {
+                if (currentFilter === 'all') return true;
+                return item.type === currentFilter;
+            });
+
+            document.getElementById('item-count').textContent = filteredItems.length;
 
             listContainer.innerHTML = '';
-            if (items.length === 0) {
-                emptyState.textContent = "You have no saved items yet. Use the form above to store your first paste or file!";
+            if (filteredItems.length === 0) {
+                const message = items.length === 0 
+                    ? "You have no saved items yet. Use the form above to store your first paste or file!"
+                    : "No items match the current filter selection.";
+                emptyState.textContent = message;
                 listContainer.appendChild(emptyState);
             } else {
-                // Append cards directly to the container
-                items.forEach(item => {
+                filteredItems.forEach(item => {
                     listContainer.appendChild(renderItemCard(item));
                 });
-                if (emptyState) emptyState.remove();
             }
+        };
+
+        const attachFormListeners = () => {
+            // Attach input listener for the text field (BUG FIX)
+            const textInput = document.getElementById('paste-text');
+            if (textInput) {
+                textInput.addEventListener('input', toggleSaveButton);
+            }
+            
+            // Run initial check
+            toggleSaveButton();
         };
 
         const renderFormFields = () => {
@@ -418,6 +518,8 @@
                 `;
                 fileInfo.classList.remove('hidden');
             }
+            // Re-attach listeners every time the form fields are re-rendered
+            attachFormListeners();
         };
 
         // --- AUTHENTICATION FLOWS ---
@@ -446,6 +548,7 @@
                 authStatus.textContent = 'Please sign in to access your vault.';
                 authContainer.classList.remove('hidden');
                 mainApp.classList.add('hidden');
+                savedItems = []; // Clear global state
                 renderItemList([]); // Clear the list
             }
         };
@@ -455,10 +558,8 @@
             try {
                 const provider = new GoogleAuthProvider();
                 await signInWithPopup(auth, provider);
-                // Auth state observer handles the UI update
             } catch (error) {
                 console.error("Google Sign-in Error:", error);
-                // Handle popup closed error silently
                 if (error.code !== 'auth/popup-closed-by-user') {
                     showMessage('auth-message', error.message, true);
                 }
@@ -495,7 +596,6 @@
         const handleSignOut = async () => {
             try {
                 await signOut(auth);
-                // UI update handled by onAuthStateChanged
             } catch (error) {
                 console.error("Sign Out Error:", error);
             }
@@ -505,7 +605,6 @@
         let unsubscribeData = null;
 
         const attachDataListener = () => {
-            // Unsubscribe existing listener if present
             if (unsubscribeData) {
                 unsubscribeData();
                 unsubscribeData = null;
@@ -513,16 +612,16 @@
 
             try {
                 const filesCollectionRef = getUserCollectionRef();
-                // We order by createdAt descending to show newest items first
                 const q = query(filesCollectionRef, orderBy("createdAt", "desc"));
 
-                // Attach the new listener
                 unsubscribeData = onSnapshot(q, (snapshot) => {
                     const fetchedItems = [];
                     snapshot.forEach((doc) => {
                         fetchedItems.push({ id: doc.id, ...doc.data() });
                     });
-                    renderItemList(fetchedItems);
+                    
+                    savedItems = fetchedItems; // Update global state
+                    renderItemList(savedItems); // Render using the new data and current filter
                 }, (error) => {
                     console.error("Error listening to Firestore snapshot:", error);
                     document.getElementById('empty-state').textContent = `Error loading data: ${error.message}`;
@@ -546,7 +645,6 @@
             currentUploadType = type;
             renderFormFields();
             document.getElementById('save-btn').textContent = `Save ${type === 'text' ? 'Paste' : 'File'}`;
-            document.getElementById('save-btn').disabled = false;
         };
 
         const handleFormSubmit = async (event) => {
@@ -566,7 +664,6 @@
                     const text = document.getElementById('paste-text').value;
                     if (!text) throw new Error('Paste content cannot be empty.');
 
-                    // Base64 encode the text content to ensure consistency with file storage
                     data = {
                         type: 'text',
                         filename: title || `Untitled Paste - ${new Date().toLocaleString()}`,
@@ -576,6 +673,7 @@
                     
                     document.getElementById('paste-text').value = '';
                     document.getElementById('paste-title').value = '';
+                    toggleSaveButton(); // Re-check button state after clearing form
 
                 } else if (currentUploadType === 'file') {
                     const fileInput = document.getElementById('file-upload');
@@ -606,9 +704,8 @@
                 showMessage('save-message', `Error: ${error.message}`, true);
             } finally {
                 saveBtn.textContent = `Save ${currentUploadType === 'text' ? 'Paste' : 'File'}`;
-                saveBtn.disabled = false;
-                saveBtn.classList.remove('bg-gray-400');
-                saveBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                // Re-enable button based on the current state (important for file tab which is usually enabled)
+                toggleSaveButton();
             }
         };
 
@@ -616,13 +713,19 @@
         
         window.onload = () => {
             // 1. Initial UI setup
-            renderFormFields();
+            renderFormFields(); // Renders fields and attaches input listener for save button fix
 
             // 2. Attach UI listeners
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', handleTabClick);
             });
             document.getElementById('content-form').addEventListener('submit', handleFormSubmit);
+
+            // Feature: Filter listener
+            document.getElementById('filter-type').addEventListener('change', (e) => {
+                currentFilter = e.target.value;
+                renderItemList(savedItems);
+            });
 
             // File size info update for visual feedback
             document.addEventListener('change', (e) => {
