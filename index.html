@@ -171,11 +171,11 @@
         </div>
     </div>
 
-    <!-- Firebase SDK Modules (Updated to 12.3.0) -->
+    <!-- Firebase SDK Modules (Updated to 11.6.1 stable for CDN) -->
     <script type="module">
         // Import the functions you need from the SDKs you need
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
-        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-analytics.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
         
         import { 
             getAuth, 
@@ -185,7 +185,7 @@
             signInWithEmailAndPassword, 
             createUserWithEmailAndPassword,
             signOut
-        } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         
         import { 
             getFirestore, 
@@ -199,12 +199,13 @@
             getDocs,
             setDoc,
             orderBy
-        } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js";
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL SETUP & FIREBASE INITIALIZATION ---
 
+        // WARNING: Replace with your actual Firebase Configuration for a production environment.
         const firebaseConfig = {
             apiKey: "AIzaSyC4dWBM-Sny6PGuPDa_oeOj7dfOBgaoB2c",
             authDomain: "datavault-e4ce1.firebaseapp.com",
@@ -221,8 +222,8 @@
         const auth = getAuth(app);
         setLogLevel('debug'); 
 
-        // Global state for application
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // Static ID for GitHub Pages deployment. This replaces the old '__app_id'.
+        const GITHUB_APP_ID = 'secure-data-vault-github'; 
         let userId = null;
         let currentUploadType = 'text';
         let savedItems = [];      // Holds all fetched items from Firestore
@@ -305,7 +306,8 @@
 
         const getUserCollectionRef = () => {
             if (!userId) throw new Error("User not authenticated.");
-            return collection(db, `artifacts/${appId}/users/${userId}/files`);
+            // Updated to use the static GITHUB_APP_ID
+            return collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`);
         };
 
         const saveContent = async (data) => {
@@ -326,7 +328,8 @@
             const chunkPromises = [];
             for (let i = 0; i < numChunks; i++) {
                 const chunk = content.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                const chunkDocRef = doc(db, docRef.path, 'chunks', i.toString());
+                // Chunk document path must include the GITHUB_APP_ID
+                const chunkDocRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docRef.id}/chunks`, i.toString());
                 
                 chunkPromises.push(setDoc(chunkDocRef, { index: i, content: chunk }));
             }
@@ -336,7 +339,8 @@
         };
 
         const fetchContentAndReconstruct = async (docId) => {
-            const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
+            // Updated to use the static GITHUB_APP_ID
+            const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
             
             const q = query(chunksRef, orderBy("index"));
             const chunkSnapshot = await getDocs(q);
@@ -353,12 +357,37 @@
         };
         
         const deleteContent = async (docId, filename) => {
-            const isConfirmed = window.confirm(`Are you sure you want to delete '${filename}'? This cannot be undone.`);
-            if (!isConfirmed) return;
+            // Using custom modal instead of window.confirm
+            const confirmDelete = await new Promise(resolve => {
+                const modal = document.getElementById('content-modal');
+                const title = document.getElementById('modal-title');
+                const content = document.getElementById('modal-content-preview');
+                const footer = modal.querySelector('.p-4.border-t');
+
+                title.textContent = `Confirm Deletion`;
+                content.textContent = `Are you sure you want to delete '${filename}'? This action cannot be undone.`;
+                document.getElementById('modal-file-info').textContent = '';
+                document.getElementById('modal-media-container').classList.add('hidden');
+                
+                footer.innerHTML = `
+                    <button id="cancel-delete-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors">
+                        Cancel
+                    </button>
+                    <button id="confirm-delete-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors">
+                        Delete Permanently
+                    </button>
+                `;
+
+                document.getElementById('cancel-delete-btn').onclick = () => { closeModal(); resolve(false); };
+                document.getElementById('confirm-delete-btn').onclick = () => { closeModal(); resolve(true); };
+                openModal();
+            });
+
+            if (!confirmDelete) return;
 
             try {
-                // Delete Chunks
-                const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
+                // Delete Chunks (Updated path to use GITHUB_APP_ID)
+                const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
                 const chunkSnapshot = await getDocs(chunksRef);
                 const deleteChunkPromises = [];
                 chunkSnapshot.forEach(chunkDoc => {
@@ -366,8 +395,8 @@
                 });
                 await Promise.all(deleteChunkPromises);
 
-                // Delete Parent Document
-                const docRef = doc(db, `artifacts/${appId}/users/${userId}/files`, docId);
+                // Delete Parent Document (Updated path to use GITHUB_APP_ID)
+                const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, docId);
                 await deleteDoc(docRef);
                 showMessage('save-message', `Item '${filename}' deleted successfully!`);
             } catch (error) {
@@ -384,7 +413,8 @@
             
             try {
                 // 1. Get metadata (must be done first to get mimeType and filename)
-                const docRef = doc(db, `artifacts/${appId}/users/${userId}/files`, fileId);
+                // Updated path to use GITHUB_APP_ID
+                const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                 const docSnap = await getDoc(docRef);
                 if (!docSnap.exists()) {
                     throw new Error(`File ID "${fileId}" not found for this user.`);
@@ -395,8 +425,20 @@
                 const fullContent = await fetchContentAndReconstruct(fileId);
 
                 // 3. Determine if content should be base64-decoded
-                const isText = type === 'text' && mimeType.includes('text/plain');
-                const contentToDisplay = isText ? atob(fullContent) : fullContent;
+                // Files are often saved as base64 but can be decoded to view if they are plain text
+                const isText = type === 'text' || mimeType.includes('text/plain');
+                let contentToDisplay;
+
+                if (isText) {
+                    try {
+                        contentToDisplay = atob(fullContent); // Try decoding for text/code
+                    } catch (e) {
+                        contentToDisplay = fullContent; // Fallback to raw base64 if decoding fails
+                    }
+                } else {
+                    contentToDisplay = fullContent;
+                }
+
 
                 // 4. Update the page title and body content
                 document.title = `RAW: ${filename}`;
@@ -436,6 +478,24 @@
             mediaContainer.innerHTML = '';
             mediaContainer.classList.add('hidden');
 
+            // Reset modal footer to original state (View/Copy/Download)
+            const footer = document.getElementById('content-modal').querySelector('.p-4.border-t');
+            footer.innerHTML = `
+                <a id="modal-download-btn" href="#" download class="px-4 py-2 text-sm font-medium rounded-lg text-teal-600 border border-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
+                    Download File
+                </a>
+                <button id="modal-share-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
+                    Copy Share Link
+                </button>
+                <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                    Copy Raw Content
+                </button>
+            `;
+            // Re-fetch button elements after resetting the innerHTML
+            const modalDownloadBtnFinal = document.getElementById('modal-download-btn');
+            const modalCopyBtnFinal = document.getElementById('modal-copy-btn');
+            const modalShareBtnFinal = document.getElementById('modal-share-btn');
+
             try {
                 const fullContent = await fetchContentAndReconstruct(docId);
                 const dataUri = `data:${mimeType};base64,${fullContent}`;
@@ -474,19 +534,19 @@
                 `;
 
                 // 4. Set up Download Link (NEW)
-                modalDownloadBtn.href = dataUri;
-                modalDownloadBtn.download = filename;
+                modalDownloadBtnFinal.href = dataUri;
+                modalDownloadBtnFinal.download = filename;
 
                 // 5. Set up copy handlers
-                modalCopyBtn.textContent = isText ? 'Copy Text/Code' : 'Copy Base64';
-                modalCopyBtn.onclick = () => {
-                    copyTextToClipboard(contentToDisplay, modalCopyBtn);
+                modalCopyBtnFinal.textContent = isText ? 'Copy Text/Code' : 'Copy Base64';
+                modalCopyBtnFinal.onclick = () => {
+                    copyTextToClipboard(contentToDisplay, modalCopyBtnFinal);
                 };
 
                 // 6. Set up Share link copy
                 const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${docId}`;
-                modalShareBtn.onclick = () => {
-                    copyTextToClipboard(shareLink, modalShareBtn);
+                modalShareBtnFinal.onclick = () => {
+                    copyTextToClipboard(shareLink, modalShareBtnFinal);
                 };
 
                 openModal();
@@ -507,6 +567,74 @@
 
         // --- UI RENDERING FUNCTIONS ---
 
+        const handleTabClick = (e) => {
+            currentUploadType = e.currentTarget.dataset.type;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if (btn.dataset.type === currentUploadType) {
+                    btn.classList.add('bg-indigo-600', 'text-white', 'shadow-lg');
+                    btn.classList.remove('bg-white', 'text-gray-700', 'hover:bg-gray-50');
+                } else {
+                    btn.classList.remove('bg-indigo-600', 'text-white', 'shadow-lg');
+                    btn.classList.add('bg-white', 'text-gray-700', 'hover:bg-gray-50');
+                }
+            });
+            renderFormFields();
+        };
+
+        const handleFormSubmit = async (e) => {
+            e.preventDefault();
+            document.getElementById('save-message').classList.add('hidden');
+            const saveBtn = document.getElementById('save-btn');
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = 'Saving...';
+            saveBtn.disabled = true;
+
+            try {
+                let data = {};
+
+                if (currentUploadType === 'text') {
+                    const textContent = document.getElementById('paste-text').value.trim();
+                    if (!textContent) throw new Error("Text content cannot be empty.");
+                    
+                    // Base64 encode text content before saving to keep it consistent with files
+                    const base64Content = btoa(textContent);
+
+                    data = {
+                        type: 'text',
+                        filename: document.getElementById('paste-title').value.trim() || `Paste-${new Date().toLocaleTimeString()}`,
+                        mimeType: 'text/plain',
+                        content: base64Content
+                    };
+                    document.getElementById('paste-text').value = ''; // Clear form
+                    document.getElementById('paste-title').value = '';
+                } else { // 'file'
+                    const fileInput = document.getElementById('file-upload');
+                    const file = fileInput.files[0];
+                    if (!file) throw new Error("Please select a file to upload.");
+                    
+                    const { base64Content, mimeType } = await fileToBase64(file);
+
+                    data = {
+                        type: 'file',
+                        filename: file.name,
+                        mimeType: mimeType,
+                        content: base64Content
+                    };
+                    fileInput.value = ''; // Clear form
+                }
+
+                await saveContent(data);
+                showMessage('save-message', `${data.type === 'file' ? 'File' : 'Text'} saved successfully!`);
+
+            } catch (error) {
+                console.error("Save Error:", error);
+                showMessage('save-message', `Failed to save: ${error.message}`, true);
+            } finally {
+                saveBtn.textContent = originalText;
+                toggleSaveButton();
+            }
+        };
+
         const toggleSaveButton = () => {
             const saveBtn = document.getElementById('save-btn');
             const isTextTab = currentUploadType === 'text';
@@ -519,7 +647,12 @@
                     shouldBeDisabled = false;
                 }
             } else { 
-                shouldBeDisabled = false;
+                // For files, we assume the file input is ready to select a file, but we keep it enabled
+                // when a file is selected. Since we can't reliably check file selection on form change 
+                // when handling submission, we rely on the form submit handler to validate, 
+                // but we enable the button once the form fields are rendered to prompt interaction.
+                // Simplified: always enabled for file tab since we clear input on success.
+                shouldBeDisabled = false; 
             }
 
             saveBtn.disabled = shouldBeDisabled;
@@ -673,7 +806,8 @@
                 
                 // Otherwise, load in the modal
                 try {
-                    const docRef = doc(db, `artifacts/${appId}/users/${userId}/files`, fileId);
+                    // Updated path to use GITHUB_APP_ID
+                    const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                     const docSnap = await getDoc(docRef);
 
                     if (docSnap.exists()) {
