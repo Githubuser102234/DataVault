@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Data Vault</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom scrollbar for the textarea and card content for aesthetics */
+        textarea::-webkit-scrollbar, .content-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        textarea::-webkit-scrollbar-thumb, .content-container::-webkit-scrollbar-thumb {
+            background-color: #a5b4fc; /* Indigo-300 */
+            border-radius: 4px;
+        }
+        textarea::-webkit-scrollbar-track, .content-container::-webkit-scrollbar-track {
+            background-color: #f3f4f6; /* Gray-100 */
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans min-h-screen">
+    <div id="app" class="max-w-4xl mx-auto p-4 sm:p-8">
+        <!-- Header -->
+        <div class="p-4 bg-white border-b border-gray-200 shadow-md rounded-t-xl">
+            <h1 class="text-3xl font-extrabold text-gray-800 mb-1">
+                <span class="text-indigo-600">Secure</span> Data Vault
+            </h1>
+            <p id="auth-status" class="text-sm text-gray-500">
+                Awaiting authentication...
+            </p>
+        </div>
+
+        <!-- Authentication Container -->
+        <div id="auth-container" class="bg-white p-6 shadow-lg rounded-b-xl mb-6 hidden">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Sign In / Sign Up</h2>
+            <div id="auth-message" class="mb-3 p-3 rounded-lg text-sm hidden"></div>
+            
+            <form id="email-form" class="space-y-4">
+                <input type="email" id="auth-email" placeholder="Email" required
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                <input type="password" id="auth-password" placeholder="Password" required
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                
+                <div class="flex flex-col space-y-2">
+                    <button type="submit" id="signin-btn" 
+                            class="w-full py-3 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                        Sign In
+                    </button>
+                    <button type="button" id="signup-btn" 
+                            class="w-full py-3 rounded-lg font-bold text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
+                        Create Account
+                    </button>
+                </div>
+            </form>
+
+            <div class="my-4 flex items-center">
+                <hr class="flex-grow border-gray-300">
+                <span class="mx-4 text-gray-500 text-sm">OR</span>
+                <hr class="flex-grow border-gray-300">
+            </div>
+
+            <button type="button" id="google-signin-btn" 
+                    class="w-full py-3 rounded-lg font-bold text-gray-700 border border-gray-300 bg-white hover:bg-gray-100 transition-colors flex items-center justify-center space-x-2">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.62-.05-1.22-.16-1.81H12v3.42h5.71a4.25 4.25 0 01-1.84 2.79v2.24h2.89c1.69-1.55 2.66-3.83 2.66-6.64z" fill="#4285F4"/><path d="M12 22c3.08 0 5.67-1.03 7.56-2.8l-2.89-2.24c-.79.53-1.8.84-3.67.84-2.83 0-5.24-1.91-6.1-4.49H3.06v2.33C4.81 20.37 8.1 22 12 22z" fill="#34A853"/><path d="M5.9 14.73c-.22-.62-.35-1.3-.35-2.01s.13-1.39.35-2.01V8.39H3.06a9.55 9.55 0 000 7.22l2.84-1.68z" fill="#FBBC05"/><path d="M12 5.51c1.67 0 3.16.58 4.34 1.71l2.45-2.45C16.92 2.77 14.54 2 12 2 8.1 2 4.81 3.63 3.06 6.39l2.84 1.68c.86-2.58 3.27-4.49 6.1-4.49z" fill="#EA4335"/></svg>
+                Sign In with Google
+            </button>
+        </div>
+        
+        <!-- Main Application (Hidden until authenticated) -->
+        <div id="main-app" class="hidden">
+            <!-- Tabs -->
+            <div class="flex bg-white rounded-t-xl overflow-hidden border-b border-gray-200 shadow-sm">
+                <button data-type="text" class="tab-btn flex-1 py-3 px-4 text-center font-semibold transition-colors duration-200 bg-indigo-600 text-white shadow-lg">
+                    Paste Text/Code
+                </button>
+                <button data-type="file" class="tab-btn flex-1 py-3 px-4 text-center font-semibold transition-colors duration-200 bg-white text-gray-700 hover:bg-gray-50">
+                    Upload File (Base64)
+                </button>
+            </div>
+
+            <!-- Input Form -->
+            <form id="content-form" class="p-6 bg-white shadow-lg rounded-b-xl space-y-4 mb-6">
+                <div id="form-fields">
+                    <!-- Fields dynamically loaded here -->
+                </div>
+                <div id="file-info" class="text-sm text-gray-500 hidden"></div>
+                <button type="submit" id="save-btn" disabled
+                        class="w-full py-3 rounded-lg font-semibold text-white transition-colors duration-200 shadow-md bg-gray-400 cursor-not-allowed">
+                    Save Content
+                </button>
+                <div id="save-message" class="p-3 text-center rounded-lg text-green-700 bg-green-100 hidden"></div>
+            </form>
+
+            <!-- Saved Items List -->
+            <div class="pt-4">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Your Saved Items (<span id="item-count">0</span>)</h2>
+                <div id="item-list" class="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-2">
+                    <div id="empty-state" class="p-10 text-center bg-white rounded-xl shadow-md text-gray-500 col-span-full">
+                        Loading your saved items...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK Modules (Updated to 12.3.0) -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-analytics.js";
+        
+        import { 
+            getAuth, 
+            onAuthStateChanged, 
+            GoogleAuthProvider, 
+            signInWithPopup, 
+            signInWithEmailAndPassword, 
+            createUserWithEmailAndPassword,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
+        
+        import { 
+            getFirestore, 
+            collection, 
+            addDoc, 
+            onSnapshot, 
+            deleteDoc, 
+            doc,
+            query,
+            getDocs,
+            setDoc,
+            orderBy
+        } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js";
+        
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-firestore.js";
+
+        // --- GLOBAL SETUP & FIREBASE INITIALIZATION ---
+
+        // Your web app's Firebase configuration (provided by user)
+        const firebaseConfig = {
+            apiKey: "AIzaSyC4dWBM-Sny6PGuPDa_oeOj7dfOBgaoB2c",
+            authDomain: "datavault-e4ce1.firebaseapp.com",
+            projectId: "datavault-e4ce1",
+            storageBucket: "datavault-e4ce1.firebasestorage.app",
+            messagingSenderId: "297745244903",
+            appId: "1:297745244903:web:b0f98716741a09c528f842",
+            measurementId: "G-LWN453FF1P"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        // Initialize Analytics (as provided in the SDK)
+        const analytics = getAnalytics(app); 
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        setLogLevel('debug'); // Enable Firestore logging
+
+        // Global variables provided by the Canvas environment (used for private data path)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        let userId = null;
+        let currentUploadType = 'text';
+        const CHUNK_SIZE = 500 * 1024; // 500 KB limit per chunk
+
+        // --- UTILITY FUNCTIONS ---
+
+        const fileToBase64 = (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => {
+                    // Extract the Base64 part (after the mimeType prefix)
+                    const base64Content = reader.result.split(',')[1];
+                    resolve({ base64Content, mimeType: file.type || 'application/octet-stream' });
+                };
+                reader.onerror = (error) => reject(error);
+            });
+        };
+
+        const showMessage = (elementId, message, isError = false) => {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700', 'bg-yellow-100', 'text-yellow-700');
+            el.classList.add(isError ? 'bg-red-100' : 'bg-green-100', isError ? 'text-red-700' : 'text-green-700');
+            if (!isError) {
+                setTimeout(() => el.classList.add('hidden'), 5000);
+            }
+        };
+
+        // --- FIRESTORE DATA CHUNKING AND ASSEMBLY LOGIC ---
+
+        // Helper to get the user's specific files collection reference
+        const getUserCollectionRef = () => {
+            if (!userId) throw new Error("User not authenticated.");
+            // Path: /artifacts/{appId}/users/{userId}/files
+            return collection(db, `artifacts/${appId}/users/${userId}/files`);
+        };
+
+        /**
+         * Saves content, chunking it if the Base64 string exceeds CHUNK_SIZE.
+         * @param {Object} data - { type, filename, content }
+         */
+        const saveContent = async (data) => {
+            const content = data.content;
+            const isLarge = content.length > CHUNK_SIZE;
+            const numChunks = Math.ceil(content.length / CHUNK_SIZE);
+
+            // 1. Save Metadata to the parent document
+            const filesCollectionRef = getUserCollectionRef();
+            const docRef = await addDoc(filesCollectionRef, {
+                type: data.type,
+                filename: data.filename,
+                mimeType: data.mimeType,
+                isChunked: isLarge,
+                userId: userId,
+                createdAt: Date.now(),
+            });
+            
+            // 2. Save all content (chunked or not) to the 'chunks' subcollection
+            const chunkPromises = [];
+            for (let i = 0; i < numChunks; i++) {
+                const chunk = content.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                // Create a reference to the chunk document
+                const chunkDocRef = doc(db, docRef.path, 'chunks', i.toString());
+                
+                chunkPromises.push(setDoc(chunkDocRef, { index: i, content: chunk }));
+            }
+            
+            await Promise.all(chunkPromises);
+            return docRef.id;
+        };
+
+        /**
+         * Fetches all chunks for a document and reassembles the original Base64 string.
+         * @param {string} docId - The ID of the parent document.
+         * @returns {string} The full reassembled Base64 content.
+         */
+        const fetchContentAndReconstruct = async (docId) => {
+            const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
+            
+            // Order by index to ensure chunks are assembled in the correct sequence
+            const q = query(chunksRef, orderBy("index"));
+            const chunkSnapshot = await getDocs(q);
+
+            const chunks = [];
+            chunkSnapshot.forEach(chunkDoc => {
+                chunks.push(chunkDoc.data());
+            });
+
+            if (chunks.length === 0) throw new Error("Content chunks not found or inaccessible.");
+
+            // Combine to get the full Base64 string
+            const fullContent = chunks.map(c => c.content).join('');
+            
+            return fullContent;
+        };
+        
+        /**
+         * Deletes the parent document AND all its chunks.
+         */
+        const deleteContent = async (docId, filename) => {
+            const isConfirmed = window.confirm(`Are you sure you want to delete '${filename}'? This cannot be undone.`);
+            if (!isConfirmed) return;
+
+            try {
+                // Delete Chunks first (optional but safer)
+                const chunksRef = collection(db, `artifacts/${appId}/users/${userId}/files/${docId}/chunks`);
+                const chunkSnapshot = await getDocs(chunksRef);
+                const deleteChunkPromises = [];
+                chunkSnapshot.forEach(chunkDoc => {
+                    deleteChunkPromises.push(deleteDoc(doc(db, chunksRef.path, chunkDoc.id)));
+                });
+                await Promise.all(deleteChunkPromises);
+
+                // Delete Parent Document
+                const docRef = doc(db, `artifacts/${appId}/users/${userId}/files`, docId);
+                await deleteDoc(docRef);
+                showMessage('save-message', `Item '${filename}' deleted successfully!`);
+            } catch (error) {
+                console.error("Error deleting document:", error);
+                showMessage('save-message', `Error deleting item: ${error.message}`, true);
+            }
+        };
+
+        // --- UI RENDERING FUNCTIONS ---
+
+        const renderItemCard = (item) => {
+            const formattedDate = new Date(item.createdAt).toLocaleString();
+            const typeLabel = item.type === 'text' ? 'Paste' : 'File';
+            const typeColor = item.type === 'text' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700';
+
+            const card = document.createElement('div');
+            card.className = 'bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between';
+            card.innerHTML = `
+                <div>
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="text-lg font-semibold text-gray-900 break-words max-w-[80%]">
+                            ${item.filename}
+                        </h3>
+                        <span class="text-xs font-medium px-2 py-1 rounded-full whitespace-nowrap ${typeColor}">
+                            ${typeLabel}
+                        </span>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-3">
+                        Saved: ${formattedDate}
+                    </p>
+                    <div class="text-xs text-gray-400 mb-2">
+                        ${item.isChunked ? '<span class="text-orange-600 font-semibold">LARGE (Chunked)</span>' : 'Small Content'}
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+                    <button class="load-content-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                        data-id="${item.id}" 
+                        data-filename="${item.filename}"
+                        data-mimetype="${item.mimeType}">
+                        View / Copy
+                    </button>
+                    <a href="#" class="download-link hidden flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
+                        Download
+                    </a>
+                    <button class="delete-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                        data-id="${item.id}" 
+                        data-filename="${item.filename}">
+                        Delete
+                    </button>
+                </div>
+            `;
+
+            // Attach event listeners after rendering the static part
+            card.querySelector('.delete-btn').addEventListener('click', () => {
+                deleteContent(item.id, item.filename);
+            });
+
+            const loadBtn = card.querySelector('.load-content-btn');
+            const downloadLink = card.querySelector('.download-link');
+            
+            loadBtn.addEventListener('click', async () => {
+                loadBtn.textContent = 'Loading...';
+                loadBtn.disabled = true;
+                loadBtn.classList.remove('hover:bg-indigo-100');
+
+                try {
+                    // 1. Fetch and reconstruct the full Base64 content
+                    const fullContent = await fetchContentAndReconstruct(item.id);
+                    const dataUri = `data:${item.mimeType};base64,${fullContent}`;
+
+                    // 2. Set up download link
+                    downloadLink.href = dataUri;
+                    downloadLink.download = item.filename;
+                    downloadLink.textContent = item.type === 'text' ? 'Download Text' : 'Download File';
+                    downloadLink.classList.remove('hidden');
+
+                    // 3. Copy the content (Base64 or raw text if mime is text/plain)
+                    // The atob function is used to convert Base64 back to raw text for copying if it's plain text.
+                    const contentToCopy = item.type === 'text' && item.mimeType.includes('text/plain') ? atob(fullContent) : fullContent;
+                    
+                    const textarea = document.createElement('textarea');
+                    textarea.value = contentToCopy;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = 0;
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+
+                    alert(`Content copied to clipboard!\n${item.isChunked ? '(Note: Copied Base64 string from chunks)' : ''}`);
+
+                } catch (error) {
+                    console.error("Error loading content:", error);
+                    alert(`Error loading content: ${error.message}`);
+                } finally {
+                    loadBtn.textContent = 'Content Loaded (Copied)';
+                    loadBtn.disabled = false;
+                    loadBtn.classList.add('hover:bg-indigo-100');
+                }
+            });
+
+            return card;
+        };
+
+        const renderItemList = (items) => {
+            const listContainer = document.getElementById('item-list');
+            const emptyState = document.getElementById('empty-state');
+            document.getElementById('item-count').textContent = items.length;
+
+            listContainer.innerHTML = '';
+            if (items.length === 0) {
+                emptyState.textContent = "You have no saved items yet. Use the form above to store your first paste or file!";
+                listContainer.appendChild(emptyState);
+            } else {
+                // Append cards directly to the container
+                items.forEach(item => {
+                    listContainer.appendChild(renderItemCard(item));
+                });
+                if (emptyState) emptyState.remove();
+            }
+        };
+
+        const renderFormFields = () => {
+            const fieldsContainer = document.getElementById('form-fields');
+            const fileInfo = document.getElementById('file-info');
+
+            if (currentUploadType === 'text') {
+                fieldsContainer.innerHTML = `
+                    <input type="text" id="paste-title" placeholder="Title (optional, e.g., 'React Hook Logic')" 
+                        class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                    <textarea id="paste-text" placeholder="Paste your text or code here..." rows="8" required
+                        class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"></textarea>
+                `;
+                fileInfo.classList.add('hidden');
+            } else { // 'file'
+                fieldsContainer.innerHTML = `
+                    <input type="file" id="file-upload" required
+                        class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                `;
+                fileInfo.classList.remove('hidden');
+            }
+        };
+
+        // --- AUTHENTICATION FLOWS ---
+
+        const handleAuthStateChanged = (user) => {
+            const authContainer = document.getElementById('auth-container');
+            const mainApp = document.getElementById('main-app');
+            const authStatus = document.getElementById('auth-status');
+
+            if (user) {
+                userId = user.uid;
+                authStatus.innerHTML = `
+                    <span class="font-medium">Signed In as:</span> 
+                    <code class="text-xs ml-1 px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded">
+                        ${user.email || user.displayName || 'Google User'}
+                    </code>
+                    <button id="signout-btn" class="ml-3 text-red-500 hover:text-red-700 text-sm font-medium">Sign Out</button>
+                `;
+                document.getElementById('signout-btn').addEventListener('click', handleSignOut);
+                
+                authContainer.classList.add('hidden');
+                mainApp.classList.remove('hidden');
+                attachDataListener();
+            } else {
+                userId = null;
+                authStatus.textContent = 'Please sign in to access your vault.';
+                authContainer.classList.remove('hidden');
+                mainApp.classList.add('hidden');
+                renderItemList([]); // Clear the list
+            }
+        };
+
+        const handleGoogleSignIn = async () => {
+            document.getElementById('auth-message').classList.add('hidden');
+            try {
+                const provider = new GoogleAuthProvider();
+                await signInWithPopup(auth, provider);
+                // Auth state observer handles the UI update
+            } catch (error) {
+                console.error("Google Sign-in Error:", error);
+                // Handle popup closed error silently
+                if (error.code !== 'auth/popup-closed-by-user') {
+                    showMessage('auth-message', error.message, true);
+                }
+            }
+        };
+
+        const handleEmailAuth = async (isSignUp) => {
+            document.getElementById('auth-message').classList.add('hidden');
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            if (!email || !password) return showMessage('auth-message', "Email and password are required.", true);
+
+            try {
+                if (isSignUp) {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    showMessage('auth-message', `Account created successfully for ${email}. Signed in.`, false);
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    showMessage('auth-message', `Signed in as ${email}.`, false);
+                }
+            } catch (error) {
+                console.error("Email Auth Error:", error);
+                let message = error.message;
+                if (error.code === 'auth/email-already-in-use') message = 'This email is already registered. Try signing in.';
+                if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
+                    message = 'Invalid email or password.';
+                } else if (error.code === 'auth/weak-password') {
+                    message = 'Password should be at least 6 characters.';
+                }
+                showMessage('auth-message', message, true);
+            }
+        };
+        
+        const handleSignOut = async () => {
+            try {
+                await signOut(auth);
+                // UI update handled by onAuthStateChanged
+            } catch (error) {
+                console.error("Sign Out Error:", error);
+            }
+        }
+
+        // --- MAIN DATA LISTENER ---
+        let unsubscribeData = null;
+
+        const attachDataListener = () => {
+            // Unsubscribe existing listener if present
+            if (unsubscribeData) {
+                unsubscribeData();
+                unsubscribeData = null;
+            }
+
+            try {
+                const filesCollectionRef = getUserCollectionRef();
+                // We order by createdAt descending to show newest items first
+                const q = query(filesCollectionRef, orderBy("createdAt", "desc"));
+
+                // Attach the new listener
+                unsubscribeData = onSnapshot(q, (snapshot) => {
+                    const fetchedItems = [];
+                    snapshot.forEach((doc) => {
+                        fetchedItems.push({ id: doc.id, ...doc.data() });
+                    });
+                    renderItemList(fetchedItems);
+                }, (error) => {
+                    console.error("Error listening to Firestore snapshot:", error);
+                    document.getElementById('empty-state').textContent = `Error loading data: ${error.message}`;
+                });
+            } catch (error) {
+                console.error("Failed to attach data listener:", error);
+            }
+        };
+
+        // --- EVENT HANDLERS ---
+        
+        const handleTabClick = (event) => {
+            const type = event.target.dataset.type;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-indigo-600', 'text-white', 'shadow-lg');
+                btn.classList.add('bg-white', 'text-gray-700', 'hover:bg-gray-50');
+            });
+            event.target.classList.remove('bg-white', 'text-gray-700', 'hover:bg-gray-50');
+            event.target.classList.add('bg-indigo-600', 'text-white', 'shadow-lg');
+            
+            currentUploadType = type;
+            renderFormFields();
+            document.getElementById('save-btn').textContent = `Save ${type === 'text' ? 'Paste' : 'File'}`;
+            document.getElementById('save-btn').disabled = false;
+        };
+
+        const handleFormSubmit = async (event) => {
+            event.preventDefault();
+            const saveBtn = document.getElementById('save-btn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+            saveBtn.classList.add('bg-gray-400');
+            saveBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+            showMessage('save-message', 'Processing upload...', false);
+
+            try {
+                let data = {};
+
+                if (currentUploadType === 'text') {
+                    const title = document.getElementById('paste-title').value.trim();
+                    const text = document.getElementById('paste-text').value;
+                    if (!text) throw new Error('Paste content cannot be empty.');
+
+                    // Base64 encode the text content to ensure consistency with file storage
+                    data = {
+                        type: 'text',
+                        filename: title || `Untitled Paste - ${new Date().toLocaleString()}`,
+                        content: btoa(text), 
+                        mimeType: 'text/plain;charset=utf-8',
+                    };
+                    
+                    document.getElementById('paste-text').value = '';
+                    document.getElementById('paste-title').value = '';
+
+                } else if (currentUploadType === 'file') {
+                    const fileInput = document.getElementById('file-upload');
+                    const file = fileInput.files[0];
+                    if (!file) throw new Error('Please select a file to upload.');
+
+                    const { base64Content, mimeType } = await fileToBase64(file);
+                    
+                    data = {
+                        type: 'file',
+                        filename: file.name,
+                        content: base64Content,
+                        mimeType: mimeType,
+                    };
+                    
+                    // Clear file input
+                    fileInput.value = ''; 
+                    document.getElementById('file-info').textContent = '';
+                }
+
+                const docId = await saveContent(data);
+                
+                const isChunked = data.content.length > CHUNK_SIZE;
+                showMessage('save-message', `${data.type === 'text' ? 'Paste' : 'File'} saved (ID: ${docId}). ${isChunked ? 'Content chunked!' : 'Small content saved.'}`, false);
+
+            } catch (error) {
+                console.error('Error saving content:', error);
+                showMessage('save-message', `Error: ${error.message}`, true);
+            } finally {
+                saveBtn.textContent = `Save ${currentUploadType === 'text' ? 'Paste' : 'File'}`;
+                saveBtn.disabled = false;
+                saveBtn.classList.remove('bg-gray-400');
+                saveBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+            }
+        };
+
+        // --- INITIALIZATION ---
+        
+        window.onload = () => {
+            // 1. Initial UI setup
+            renderFormFields();
+
+            // 2. Attach UI listeners
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', handleTabClick);
+            });
+            document.getElementById('content-form').addEventListener('submit', handleFormSubmit);
+
+            // File size info update for visual feedback
+            document.addEventListener('change', (e) => {
+                if (e.target.id === 'file-upload' && e.target.files.length > 0) {
+                    const file = e.target.files[0];
+                    const infoEl = document.getElementById('file-info');
+                    const sizeInKB = (file.size / 1024).toFixed(2);
+                    const sizeColor = file.size > CHUNK_SIZE * 0.9 ? 'text-orange-500 font-bold' : 'text-gray-500';
+                    infoEl.innerHTML = `Selected: <strong>${file.name}</strong> (${sizeInKB} KB). <span class="${sizeColor}">Storage limit per chunk is ${Math.round(CHUNK_SIZE / 1024)} KB.</span>`;
+                }
+            });
+
+            // 3. Attach Auth listeners
+            document.getElementById('google-signin-btn').addEventListener('click', handleGoogleSignIn);
+            document.getElementById('signin-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(false); });
+            document.getElementById('signup-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(true); });
+            
+            // 4. Start authentication listener
+            onAuthStateChanged(auth, handleAuthStateChanged);
+        };
+    </script>
+</body>
+</html>
+
