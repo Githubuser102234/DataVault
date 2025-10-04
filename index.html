@@ -156,7 +156,7 @@
 
                 <div id="modal-file-info" class="mt-4 text-sm text-gray-600"></div>
             </div>
-            <div class="p-4 border-t border-gray-200 flex justify-end gap-3">
+            <div class="p-4 border-t border-gray-200 flex justify-end gap-3 flex-wrap">
                 <!-- Buttons are dynamically inserted/re-added here by loadContentAndOpenModal -->
             </div>
         </div>
@@ -281,9 +281,10 @@
                 // Clean up URL parameter when closing the modal, without reloading the page
                 if (window.history.replaceState) {
                     const url = new URL(window.location.href);
-                    if (url.searchParams.has('fileid') || url.searchParams.has('raw')) {
+                    if (url.searchParams.has('fileid') || url.searchParams.has('raw') || url.searchParams.has('html')) {
                         url.searchParams.delete('fileid');
                         url.searchParams.delete('raw');
+                        url.searchParams.delete('html');
                         window.history.replaceState(null, '', url.toString());
                     }
                 }
@@ -292,9 +293,12 @@
 
         const getFileParamsFromUrl = () => {
             const params = new URLSearchParams(window.location.search);
+            // fileId could be from any of the three types of links
+            const fileId = params.get('fileid') || params.get('raw') || params.get('html'); 
             return {
-                fileId: params.get('fileid') || params.get('raw'),
-                isRaw: params.has('raw')
+                fileId: fileId,
+                isRaw: params.has('raw'),
+                isHtml: params.has('html') // New: Check for HTML mode
             };
         };
 
@@ -342,7 +346,6 @@
             const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
             
             // NOTE: orderBy is used here because the 'index' field is expected to be present on the client.
-            // In a production environment, this might require a composite index or careful query planning.
             const q = query(chunksRef, orderBy("index")); 
             const chunkSnapshot = await getDocs(q);
 
@@ -460,12 +463,66 @@
             }
         };
 
+        // --- HTML CONTENT RENDERING (for ?html={id} URL) ---
+
+        /** Renders the content directly to the body for executable HTML viewing. */
+        const renderHtmlContent = async (fileId) => {
+            document.documentElement.innerHTML = '<body>Loading HTML Preview...</body>';
+            document.title = 'Loading Preview...';
+            
+            try {
+                // 1. Get metadata
+                const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
+                const docSnap = await getDoc(docRef);
+                if (!docSnap.exists()) {
+                    throw new Error(`File ID "${fileId}" not found or inaccessible.`);
+                }
+                const { filename, mimeType, type } = docSnap.data();
+
+                // Check if it's content that can be rendered as HTML
+                if (mimeType !== 'text/html' && type !== 'text') {
+                     throw new Error(`File type ${mimeType} cannot be safely rendered as executable HTML.`);
+                }
+
+                // 2. Fetch and reconstruct the full Base64 content
+                const fullBase64Content = await fetchContentAndReconstruct(fileId);
+                let contentToDisplay;
+                try {
+                    // Content is base64-encoded plain text (HTML code)
+                    contentToDisplay = atob(fullBase64Content); 
+                } catch (e) {
+                    contentToDisplay = fullBase64Content; // Fallback
+                }
+                
+                // 3. Render the HTML
+                document.title = `PREVIEW: ${filename}`;
+                
+                // Overwrite the entire document content to render and execute the saved HTML
+                document.open();
+                document.write(contentToDisplay);
+                document.close();
+                
+            } catch (error) {
+                document.title = 'Error Loading HTML';
+                document.documentElement.innerHTML = `
+                    <body class="bg-gray-900 text-red-400 p-8 font-sans">
+                        <h1 class="text-2xl font-bold mb-4">Error Loading HTML Content</h1>
+                        <p>Failed to load and render content: ${error.message}.</p>
+                        <p class="text-sm mt-4">Please sign in with the correct account or check the file ID.</p>
+                        <a href="/" class="text-blue-400 hover:text-blue-200 mt-2 block">Go Back to Data Vault</a>
+                    </body>`;
+                console.error('HTML Preview Error:', error);
+            }
+        };
+
 
         // --- CONTENT LOADING AND MODAL RENDERING ---
 
         /** Loads content, reconstructs it, and populates the preview modal. */
-        const loadContentAndOpenModal = async (docId, filename, mimeType, elementToUpdate = null) => {
+        const loadContentAndOpenModal = async (docId, filename, mimeType, itemType, elementToUpdate = null) => {
             const isTextType = mimeType.includes('text/') || mimeType.includes('application/json');
+            // Check if it originated as a text paste or is explicitly a text/html file
+            const canViewHtml = itemType === 'text' || mimeType.includes('text/html'); 
             
             if (elementToUpdate) {
                 elementToUpdate.textContent = 'Loading...';
@@ -484,12 +541,18 @@
             mediaContainer.innerHTML = '';
             mediaContainer.classList.add('hidden');
 
-            // Reset modal footer to original state (View/Copy/Download/Raw Link)
+            // Reset modal footer to original state
             const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${docId}`;
             const rawLink = `${window.location.origin}${window.location.pathname}?raw=${docId}`;
+            const htmlLink = `${window.location.origin}${window.location.pathname}?html=${docId}`;
 
             const footer = document.getElementById('content-modal').querySelector('.p-4.border-t');
             footer.innerHTML = `
+                ${canViewHtml ? `
+                    <a id="modal-view-html-btn" href="${htmlLink}" target="_blank" class="px-4 py-2 text-sm font-medium rounded-lg text-fuchsia-600 border border-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 transition-colors" title="Opens the content in a new window, rendered as functional HTML.">
+                        View Executable HTML
+                    </a>
+                ` : ''}
                 <a id="modal-download-btn" href="#" download class="px-4 py-2 text-sm font-medium rounded-lg text-teal-600 border border-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
                     Download File
                 </a>
@@ -497,7 +560,7 @@
                     Copy Share Link
                 </button>
                 <a id="modal-raw-link-btn" href="${rawLink}" target="_blank" class="px-4 py-2 text-sm font-medium rounded-lg text-yellow-700 border border-yellow-700 hover:bg-yellow-50 transition-colors">
-                    Open Raw Link
+                    Open Raw Content
                 </a>
                 <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
                     Copy Raw Content
@@ -668,7 +731,6 @@
                 }
             } else { 
                 // For file uploads, the button is enabled once the tab is selected
-                // as the file validation occurs on submission.
                 shouldBeDisabled = false; 
             }
 
@@ -689,7 +751,10 @@
             const typeColor = item.type === 'text' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700';
             
             const standardLink = `${window.location.origin}${window.location.pathname}?fileid=${item.id}`;
-            const rawLink = `${window.location.origin}${window.location.pathname}?raw=${item.id}`; // NEW RAW LINK
+            const rawLink = `${window.location.origin}${window.location.pathname}?raw=${item.id}`; 
+            const htmlLink = `${window.location.origin}${window.location.pathname}?html=${item.id}`; 
+            
+            const isHtmlOrText = item.type === 'text' || item.mimeType.includes('text/html');
 
             const card = document.createElement('div');
             card.className = 'bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between';
@@ -721,17 +786,20 @@
                     <button class="load-content-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                         data-id="${item.id}" 
                         data-filename="${item.filename}"
-                        data-mimetype="${item.mimeType}">
+                        data-mimetype="${item.mimeType}"
+                        data-type="${item.type}"> <!-- Pass item.type -->
                         View / Copy
                     </button>
                     <!-- Link to open the file directly via URL (standard modal view) -->
                     <a href="${standardLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="Open in new window">
                         Open Link
                     </a>
-                    <!-- NEW: Open Raw Link Button -->
-                    <a href="${rawLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-yellow-700 bg-yellow-100 hover:bg-yellow-200 transition-colors" title="Open raw content link">
-                        Raw Link
-                    </a>
+                    ${isHtmlOrText ? `
+                        <!-- NEW: Open HTML Link Button -->
+                        <a href="${htmlLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-fuchsia-600 bg-fuchsia-100 hover:bg-fuchsia-200 transition-colors" title="Open and execute as functional HTML">
+                            View HTML
+                        </a>
+                    ` : ''}
                     <button class="delete-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
                         data-id="${item.id}" 
                         data-filename="${item.filename}">
@@ -753,7 +821,8 @@
 
             const loadBtn = card.querySelector('.load-content-btn');
             loadBtn.addEventListener('click', async () => {
-                loadContentAndOpenModal(item.id, item.filename, item.mimeType, loadBtn);
+                // Pass the item type now
+                loadContentAndOpenModal(item.id, item.filename, item.mimeType, item.type, loadBtn);
             });
 
             return card;
@@ -799,9 +868,9 @@
 
             if (currentUploadType === 'text') {
                 fieldsContainer.innerHTML = `
-                    <input type="text" id="paste-title" placeholder="Title (optional, e.g., 'React Hook Logic')" 
+                    <input type="text" id="paste-title" placeholder="Title (optional, e.g., 'React Hook Logic' or 'My Webpage')" 
                         class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    <textarea id="paste-text" placeholder="Paste your text or code here..." rows="8" required
+                    <textarea id="paste-text" placeholder="Paste your text or code here (e.g., HTML, CSS, JS, JSON)..." rows="8" required
                         class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"></textarea>
                 `;
                 fileInfo.classList.add('hidden');
@@ -819,12 +888,21 @@
 
         /** Checks the URL for a file ID and loads it if present. */
         const loadFromUrlIfPresent = async () => {
-            const { fileId, isRaw } = getFileParamsFromUrl();
-            if (fileId && userId) { // Only attempt to load if logged in
-                
+            const { fileId, isRaw, isHtml } = getFileParamsFromUrl();
+            
+            // We must be authenticated to fetch data
+            if (!userId) {
+                if (fileId) {
+                    // If a fileId is present but user isn't logged in, we wait for sign-in or show error later.
+                    // For now, only return if no fileId is present.
+                    return; 
+                }
+                return;
+            }
+
+            if (fileId) {
                 // If it's a RAW request, we bypass the main UI rendering
                 if (isRaw) {
-                    // Hide main UI elements immediately and render raw content
                     document.getElementById('app').classList.add('hidden');
                     document.body.classList.remove('bg-gray-50');
                     document.body.classList.add('bg-black');
@@ -832,17 +910,26 @@
                     document.getElementById('auth-container').classList.add('hidden');
                     renderRawContent(fileId);
                     return; 
+                } 
+                
+                // If it's an HTML execution request (NEW FEATURE)
+                if (isHtml) {
+                    document.getElementById('app').classList.add('hidden');
+                    document.body.classList.remove('bg-gray-50');
+                    document.getElementById('main-header').classList.add('hidden');
+                    document.getElementById('auth-container').classList.add('hidden');
+                    renderHtmlContent(fileId);
+                    return; 
                 }
                 
-                // Otherwise, load in the modal
+                // Otherwise, load in the modal (standard ?fileid)
                 try {
-                    // Updated path to use GITHUB_APP_ID
                     const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                     const docSnap = await getDoc(docRef);
 
                     if (docSnap.exists()) {
                         const item = { id: docSnap.id, ...docSnap.data() };
-                        loadContentAndOpenModal(item.id, item.filename, item.mimeType);
+                        loadContentAndOpenModal(item.id, item.filename, item.mimeType, item.type);
                     } else {
                         showMessage('auth-message', `File ID "${fileId}" not found or inaccessible.`, true);
                     }
@@ -858,7 +945,7 @@
             const authContainer = document.getElementById('auth-container');
             const mainApp = document.getElementById('main-app');
             const authStatus = document.getElementById('auth-status');
-            const { isRaw } = getFileParamsFromUrl();
+            const { isRaw, isHtml } = getFileParamsFromUrl(); // Destructure new isHtml
 
             if (user) {
                 userId = user.uid;
@@ -871,14 +958,14 @@
                 `;
                 document.getElementById('signout-btn').addEventListener('click', handleSignOut);
                 
-                // Only show main app UI if not in raw mode
-                if (!isRaw) {
+                // Only show main app UI if not in raw OR html mode
+                if (!isRaw && !isHtml) {
                     authContainer.classList.add('hidden');
                     mainApp.classList.remove('hidden');
                     attachDataListener();
                 }
 
-                // Load URL content regardless of raw mode, as long as user is authenticated
+                // Load URL content regardless of mode, as long as user is authenticated
                 loadFromUrlIfPresent(); 
 
             } else {
@@ -886,15 +973,14 @@
                 userId = null;
                 authStatus.textContent = 'Please sign in to access your vault.';
                 
-                // If in raw mode, we still need to show the error later in loadFromUrlIfPresent, 
-                // but the initial UI remains hidden.
-                if (!isRaw) {
+                // If in raw or html mode, keep the main UI hidden until an error is displayed
+                if (!isRaw && !isHtml) {
                     authContainer.classList.remove('hidden');
                     mainApp.classList.add('hidden');
                 }
                 savedItems = []; 
                 renderItemList([]); 
-                loadFromUrlIfPresent(); // Attempt to load to display an error if fileId is present
+                loadFromUrlIfPresent(); // Attempt to load to display an error if fileId is present but auth is missing
             }
         };
 
@@ -984,11 +1070,12 @@
         // --- INITIALIZATION ---
         
         window.onload = () => {
-            // Check for RAW mode right away before rendering the main app structure
-            const { isRaw } = getFileParamsFromUrl();
-            if (isRaw) {
-                // If in RAW mode, hide main UI components
-                document.getElementById('app').classList.add('hidden');
+            // Check for URL modes right away
+            const { isRaw, isHtml } = getFileParamsFromUrl();
+            
+            if (isRaw || isHtml) {
+                // If in RAW or HTML mode, hide main UI components immediately
+                document.getElementById('app')?.classList.add('hidden');
                 document.body.classList.remove('bg-gray-50');
                 document.body.classList.add('bg-black');
             } else {
@@ -1014,9 +1101,9 @@
             }
 
             // Attach Auth listeners
-            document.getElementById('google-signin-btn').addEventListener('click', handleGoogleSignIn);
-            document.getElementById('signin-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(false); });
-            document.getElementById('signup-btn').addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(true); });
+            document.getElementById('google-signin-btn')?.addEventListener('click', handleGoogleSignIn);
+            document.getElementById('signin-btn')?.addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(false); });
+            document.getElementById('signup-btn')?.addEventListener('click', (e) => { e.preventDefault(); handleEmailAuth(true); });
             
             // Start authentication listener which manages UI visibility and data loading
             onAuthStateChanged(auth, handleAuthStateChanged);
