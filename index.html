@@ -33,6 +33,25 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+
+        /* Responsive Modal Fix: Ensure main content scrolls, not the whole modal */
+        #content-modal > div {
+            /* max-h-[90vh] applied in HTML */
+            display: flex;
+            flex-direction: column;
+        }
+        #content-modal .modal-content-area {
+            flex-grow: 1;
+            overflow-y: auto;
+            min-height: 0;
+            max-height: 70vh; /* Set a max height for the content, allowing the buttons to show */
+        }
+        
+        /* Specific styling for folder cards */
+        .folder-card {
+            border-left: 5px solid #3b82f6; /* Blue-500 */
+            cursor: pointer;
+        }
     </style>
 </head>
 <body class="bg-gray-50 font-sans min-h-screen">
@@ -111,18 +130,38 @@
 
             <!-- Saved Items List -->
             <div class="pt-4">
-                <h2 class="text-2xl font-bold text-gray-800 mb-4">Your Saved Items (<span id="item-count">0</span>)</h2>
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Current Folder: <span id="current-folder-name" class="text-indigo-600">Root</span></h2>
 
-                <!-- Feature: Filter Dropdown -->
-                <div class="flex justify-end mb-3">
-                    <label for="filter-type" class="mr-2 text-sm font-medium text-gray-700 self-center">Filter by Type:</label>
-                    <select id="filter-type" class="p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                        <option value="all">All Items</option>
-                        <option value="text">Text/Code Pastes</option>
-                        <option value="file">Uploaded Files</option>
-                    </select>
+                <!-- Feature: Folder Management, Breadcrumbs, and Search/Filter -->
+                <div class="bg-white p-4 rounded-xl shadow-md mb-4 space-y-3">
+                    <!-- Breadcrumb/Navigation -->
+                    <div id="folder-breadcrumb" class="text-sm font-medium text-gray-500 border-b pb-2 mb-2">
+                        <!-- Breadcrumbs rendered here -->
+                    </div>
+
+                    <!-- Actions and Search -->
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <input type="text" id="search-input" placeholder="Search by name..."
+                            class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        
+                        <select id="filter-type" class="p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 flex-shrink-0">
+                            <option value="all">All Items</option>
+                            <option value="folder">Folders Only</option>
+                            <option value="text">Text/Code Pastes</option>
+                            <option value="file">Uploaded Files</option>
+                        </select>
+
+                        <button id="create-folder-btn" 
+                                class="px-4 py-2 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors flex-shrink-0">
+                            + New Folder
+                        </button>
+                    </div>
                 </div>
-                
+
+                <p class="text-sm text-gray-600 mb-3">
+                    Showing <span id="item-count">0</span> items in current view.
+                </p>
+
                 <div id="item-list" class="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-2">
                     <div id="empty-state" class="p-10 text-center bg-white rounded-xl shadow-md text-gray-500 col-span-full">
                         Loading your saved items...
@@ -134,14 +173,17 @@
 
     <!-- Content Preview MODAL -->
     <div id="content-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-50 hidden flex items-center justify-center p-4" onclick="closeModal(event)">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden" onclick="event.stopPropagation()">
-            <div class="p-6 border-b border-gray-200 flex justify-between items-center">
+        <!-- MODAL CONTENT: max-h-[90vh] flex-col for mobile scroll fix -->
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
+            <!-- Header (Fixed) -->
+            <div class="p-6 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
                 <h3 id="modal-title" class="text-xl font-bold text-gray-800 truncate">Content Preview</h3>
                 <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
             </div>
-            <div class="p-6 overflow-y-auto max-h-[70vh]">
+            <!-- Content Area (Scrollable) -->
+            <div class="modal-content-area p-6">
                 <!-- Media Preview -->
                 <div id="modal-media-container" class="mb-4 flex justify-center max-h-[40vh] overflow-hidden rounded-lg border border-gray-300 p-2 bg-gray-100 hidden">
                     <!-- Media (img/video/audio) will be inserted here -->
@@ -156,8 +198,9 @@
 
                 <div id="modal-file-info" class="mt-4 text-sm text-gray-600"></div>
             </div>
-            <div class="p-4 border-t border-gray-200 flex justify-end gap-3 flex-wrap">
-                <!-- Buttons are dynamically inserted/re-added here by loadContentAndOpenModal -->
+            <!-- Footer (Fixed, ensures buttons are visible on mobile) -->
+            <div class="p-4 border-t border-gray-200 flex justify-end gap-3 flex-wrap flex-shrink-0">
+                <!-- Buttons are dynamically inserted/re-added here -->
             </div>
         </div>
     </div>
@@ -189,6 +232,8 @@
             query,
             getDocs,
             setDoc,
+            updateDoc, // NEW: for renaming
+            where,     // NEW: for folder filtering
             orderBy
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
@@ -213,12 +258,13 @@
         const auth = getAuth(app);
         setLogLevel('debug'); 
 
-        // Static ID for GitHub Pages deployment. This replaces the old '__app_id'.
         const GITHUB_APP_ID = 'secure-data-vault-github'; 
         let userId = null;
         let currentUploadType = 'text';
         let savedItems = [];      // Holds all fetched items from Firestore
         let currentFilter = 'all'; 
+        let currentSearchTerm = ''; // NEW: Search term state
+        let currentFolderId = 'root'; // NEW: Folder state
         const CHUNK_SIZE = 500 * 1024; // 500 KB limit per chunk
 
         // --- UTILITY FUNCTIONS ---
@@ -240,7 +286,6 @@
         const copyTextToClipboard = (text, buttonElement) => {
             const originalText = buttonElement.textContent;
             try {
-                // Use a temporary textarea for broad compatibility
                 const textarea = document.createElement('textarea');
                 textarea.value = text;
                 textarea.style.position = 'fixed';
@@ -281,6 +326,7 @@
                 // Clean up URL parameter when closing the modal, without reloading the page
                 if (window.history.replaceState) {
                     const url = new URL(window.location.href);
+                    // Check only for transient params, leave 'folder' intact
                     if (url.searchParams.has('fileid') || url.searchParams.has('raw') || url.searchParams.has('html')) {
                         url.searchParams.delete('fileid');
                         url.searchParams.delete('raw');
@@ -293,21 +339,93 @@
 
         const getFileParamsFromUrl = () => {
             const params = new URLSearchParams(window.location.search);
-            // fileId could be from any of the three types of links
             const fileId = params.get('fileid') || params.get('raw') || params.get('html'); 
             return {
                 fileId: fileId,
                 isRaw: params.has('raw'),
-                isHtml: params.has('html') // New: Check for HTML mode
+                isHtml: params.has('html')
             };
         };
+        
+        /** NEW: Loads current folder ID from URL and updates history if needed. */
+        const loadFolderIdFromUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            const urlFolderId = params.get('folder');
+            currentFolderId = urlFolderId || 'root';
+
+            // Ensure the UI reflects the folder name (we assume 'root' is named 'Root')
+            const folderName = currentFolderId === 'root' 
+                ? 'Root' 
+                : savedItems.find(item => item.id === currentFolderId)?.filename || currentFolderId;
+            document.getElementById('current-folder-name').textContent = folderName;
+
+            renderBreadcrumb();
+            return currentFolderId;
+        };
+
+        /** NEW: Updates the URL to reflect a new folder. */
+        const navigateToFolder = (folderId) => {
+            if (window.history.pushState) {
+                const url = new URL(window.location.href);
+                if (folderId === 'root') {
+                    url.searchParams.delete('folder');
+                } else {
+                    url.searchParams.set('folder', folderId);
+                }
+                window.history.pushState({ path: url.toString() }, '', url.toString());
+                // After changing URL, reload data for the new folder
+                loadFolderIdFromUrl();
+                attachDataListener();
+            }
+        };
+
+        /** NEW: Renders the folder breadcrumb. */
+        const renderBreadcrumb = () => {
+            const breadcrumbEl = document.getElementById('folder-breadcrumb');
+            let path = [];
+            let current = currentFolderId;
+
+            // Simple breadcrumb: [Root] > [Current Folder Name]
+            // For simplicity, we only show one level above root.
+            if (current !== 'root') {
+                const currentFolder = savedItems.find(item => item.id === current);
+                const parentId = currentFolder ? currentFolder.folderId : 'root';
+                
+                path.push({ id: 'root', name: 'Root' });
+                if (parentId !== 'root') {
+                     path.push({ id: parentId, name: '...' }); // Placeholder for parent
+                }
+                if (currentFolder) {
+                    path.push({ id: current, name: currentFolder.filename });
+                } else {
+                    path.push({ id: current, name: current });
+                }
+            } else {
+                path.push({ id: 'root', name: 'Root' });
+            }
+
+            breadcrumbEl.innerHTML = path.map((segment, index) => {
+                const isLast = index === path.length - 1;
+                const linkClass = isLast 
+                    ? 'text-indigo-600 font-bold' 
+                    : 'text-gray-500 hover:text-gray-700 transition-colors cursor-pointer';
+
+                return `
+                    <span class="${linkClass}" onclick="${isLast ? '' : `MapsToFolder('${segment.id}')`}">
+                        ${segment.name}
+                    </span>
+                    ${!isLast ? ' <span class="mx-1 text-gray-300">/</span> ' : ''}
+                `;
+            }).join('');
+        };
+
 
         // --- FIRESTORE DATA CHUNKING AND ASSEMBLY LOGIC ---
 
         /** Gets the Firestore collection reference for the current user's files. */
         const getUserCollectionRef = () => {
             if (!userId) throw new Error("User not authenticated.");
-            // Updated to use the static GITHUB_APP_ID
+            // All files and folders live in this collection
             return collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`);
         };
 
@@ -316,6 +434,7 @@
             const content = data.content;
             const isLarge = content.length > CHUNK_SIZE;
             const numChunks = Math.ceil(content.length / CHUNK_SIZE);
+            const folderIdToSave = loadFolderIdFromUrl(); // Get current folder ID
 
             const filesCollectionRef = getUserCollectionRef();
             const docRef = await addDoc(filesCollectionRef, {
@@ -325,12 +444,12 @@
                 isChunked: isLarge,
                 userId: userId,
                 createdAt: Date.now(),
+                folderId: folderIdToSave // NEW: Store folder ID
             });
             
             const chunkPromises = [];
             for (let i = 0; i < numChunks; i++) {
                 const chunk = content.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                // Chunk document path must include the GITHUB_APP_ID
                 const chunkDocRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docRef.id}/chunks`, i.toString());
                 
                 chunkPromises.push(setDoc(chunkDocRef, { index: i, content: chunk }));
@@ -342,7 +461,6 @@
 
         /** Fetches all chunks and reconstructs the full Base64 content. */
         const fetchContentAndReconstruct = async (docId) => {
-            // Updated to use the static GITHUB_APP_ID
             const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
             
             // NOTE: orderBy is used here because the 'index' field is expected to be present on the client.
@@ -354,7 +472,16 @@
                 chunks.push(chunkDoc.data());
             });
 
-            if (chunks.length === 0) throw new Error("Content chunks not found or inaccessible.");
+            if (chunks.length === 0) {
+                 // Check if the file metadata exists before concluding an error
+                 const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, docId);
+                 const docSnap = await getDoc(docRef);
+                 if (docSnap.exists()) {
+                     // If doc exists but no chunks, assume it's a zero-length text paste or folder
+                     if (docSnap.data().type === 'text' || docSnap.data().type === 'folder') return '';
+                 }
+                 throw new Error("Content chunks not found or inaccessible.");
+            }
 
             const fullContent = chunks
                 .sort((a, b) => a.index - b.index) // Ensure correct order client-side, just in case
@@ -364,9 +491,27 @@
             return fullContent;
         };
         
+        /** Recursively checks if a folder is empty (only checks its immediate children). */
+        const isFolderEmpty = async (folderId) => {
+            const filesCollectionRef = getUserCollectionRef();
+            // Look for any item (file or folder) whose parent is this folder
+            const q = query(filesCollectionRef, where("folderId", "==", folderId));
+            const snapshot = await getDocs(q);
+            return snapshot.empty;
+        };
+
         /** Shows a confirmation modal and deletes the item and all its chunks on confirmation. */
-        const deleteContent = async (docId, filename) => {
-            // Using custom modal instead of window.confirm
+        const deleteContent = async (docId, filename, type) => {
+            if (type === 'folder') {
+                const isEmpty = await isFolderEmpty(docId);
+                if (!isEmpty) {
+                    showMessage('save-message', `Folder '${filename}' is not empty. Please delete all contents first.`, true);
+                    return;
+                }
+            }
+
+            // Using custom modal instead of window.confirm (implementation omitted for brevity, using simple confirm)
+            // Reusing the modal for confirmation as a temporary solution
             const confirmDelete = await new Promise(resolve => {
                 const modal = document.getElementById('content-modal');
                 const title = document.getElementById('modal-title');
@@ -374,11 +519,10 @@
                 const footer = modal.querySelector('.p-4.border-t');
 
                 title.textContent = `Confirm Deletion`;
-                content.textContent = `Are you sure you want to delete '${filename}'? This action cannot be undone.`;
+                content.textContent = `Are you sure you want to delete the ${type} '${filename}'? This action cannot be undone.`;
                 document.getElementById('modal-file-info').textContent = '';
                 document.getElementById('modal-media-container').classList.add('hidden');
                 
-                // Set up temporary footer for confirmation
                 footer.innerHTML = `
                     <button id="cancel-delete-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors">
                         Cancel
@@ -396,108 +540,145 @@
             if (!confirmDelete) return;
 
             try {
-                // Delete Chunks (Updated path to use GITHUB_APP_ID)
-                const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
-                const chunkSnapshot = await getDocs(chunksRef);
-                const deleteChunkPromises = [];
-                chunkSnapshot.forEach(chunkDoc => {
-                    deleteChunkPromises.push(deleteDoc(doc(db, chunksRef.path, chunkDoc.id)));
-                });
-                await Promise.all(deleteChunkPromises);
+                // Only delete chunks if it's not a folder (folders have no chunks)
+                if (type !== 'folder') {
+                    const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
+                    const chunkSnapshot = await getDocs(chunksRef);
+                    const deleteChunkPromises = [];
+                    chunkSnapshot.forEach(chunkDoc => {
+                        deleteChunkPromises.push(deleteDoc(doc(db, chunksRef.path, chunkDoc.id)));
+                    });
+                    await Promise.all(deleteChunkPromises);
+                }
 
-                // Delete Parent Document (Updated path to use GITHUB_APP_ID)
+                // Delete Parent Document
                 const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, docId);
                 await deleteDoc(docRef);
-                showMessage('save-message', `Item '${filename}' deleted successfully!`);
+                showMessage('save-message', `${type === 'folder' ? 'Folder' : 'Item'} '${filename}' deleted successfully!`);
             } catch (error) {
                 console.error("Error deleting document:", error);
                 showMessage('save-message', `Error deleting item: ${error.message}`, true);
             }
         };
+        
+        /** NEW: Handles renaming a file or folder. */
+        const renameContent = async (docId, currentName, type) => {
+             // Custom prompt for input instead of window.prompt
+            const newName = await new Promise(resolve => {
+                const modal = document.getElementById('content-modal');
+                const title = document.getElementById('modal-title');
+                const content = document.getElementById('modal-content-preview');
+                const footer = modal.querySelector('.p-4.border-t');
 
-        // --- RAW CONTENT RENDERING (for ?raw={id} URL) ---
+                title.textContent = `Rename ${type}`;
+                content.innerHTML = `
+                    <p class="mb-2">Enter a new name for '${currentName}':</p>
+                    <input id="rename-input" type="text" value="${currentName}" 
+                           class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                `;
+                document.getElementById('modal-file-info').textContent = '';
+                document.getElementById('modal-media-container').classList.add('hidden');
+                
+                footer.innerHTML = `
+                    <button id="cancel-rename-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors">
+                        Cancel
+                    </button>
+                    <button id="confirm-rename-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                        Rename
+                    </button>
+                `;
+                openModal();
+
+                document.getElementById('cancel-rename-btn').onclick = () => { closeModal(); resolve(null); };
+                document.getElementById('confirm-rename-btn').onclick = () => { 
+                    const input = document.getElementById('rename-input').value.trim();
+                    closeModal(); 
+                    resolve(input); 
+                };
+            });
+
+            if (!newName || newName === currentName) return;
+
+            try {
+                const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, docId);
+                await updateDoc(docRef, { filename: newName });
+                showMessage('save-message', `${type} renamed to '${newName}' successfully!`);
+            } catch (error) {
+                console.error("Error renaming document:", error);
+                showMessage('save-message', `Error renaming: ${error.message}`, true);
+            }
+        }
+
+
+        // --- RAW & HTML CONTENT RENDERING (for URL modes) ---
 
         /** Renders the content directly to the body for raw viewing. */
         const renderRawContent = async (fileId) => {
+            // ... (Raw Content logic remains the same)
             document.body.innerHTML = 'Loading RAW Content...';
             document.body.classList.add('raw-mode');
             
             try {
-                // 1. Get metadata (must be done first to get mimeType and filename)
-                // Updated path to use GITHUB_APP_ID
                 const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                 const docSnap = await getDoc(docRef);
-                if (!docSnap.exists()) {
-                    throw new Error(`File ID "${fileId}" not found or inaccessible.`);
+                if (!docSnap.exists() || docSnap.data().type === 'folder') { // Don't show raw folder content
+                    throw new Error(`File ID "${fileId}" not found, inaccessible, or is a folder.`);
                 }
                 const { filename, mimeType, type } = docSnap.data();
 
-                // 2. Fetch and reconstruct the full Base64 content
                 const fullContent = await fetchContentAndReconstruct(fileId);
-
-                // 3. Determine if content should be base64-decoded
                 const isText = type === 'text' || mimeType.includes('text/plain') || mimeType.includes('text/html') || mimeType.includes('application/json');
                 let contentToDisplay;
 
                 if (isText) {
                     try {
-                        // Decode base64 to plain text for pastes
                         contentToDisplay = atob(fullContent); 
                     } catch (e) {
-                        contentToDisplay = fullContent; // Fallback
+                        contentToDisplay = fullContent;
                     }
                 } else {
-                    // For binary files (images, videos), show the raw base64 string
                     contentToDisplay = fullContent;
                 }
 
-                // 4. Update the page title and body content
                 document.title = `RAW: ${filename}`;
                 document.body.textContent = contentToDisplay;
 
             } catch (error) {
                 document.title = 'Error Loading RAW';
                 document.body.textContent = `ERROR: Failed to load content: ${error.message}. Please sign in with the correct account or check the file ID.`;
-                document.body.style.color = '#ff6b6b'; // Red color for error
+                document.body.style.color = '#ff6b6b'; 
                 console.error('RAW Content Error:', error);
             }
         };
 
-        // --- HTML CONTENT RENDERING (for ?html={id} URL) ---
-
         /** Renders the content directly to the body for executable HTML viewing. */
         const renderHtmlContent = async (fileId) => {
-            document.documentElement.innerHTML = '<body>Loading HTML Preview...</body>';
+            // ... (HTML Content logic remains the same)
+             document.documentElement.innerHTML = '<body>Loading HTML Preview...</body>';
             document.title = 'Loading Preview...';
             
             try {
-                // 1. Get metadata
                 const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                 const docSnap = await getDoc(docRef);
-                if (!docSnap.exists()) {
-                    throw new Error(`File ID "${fileId}" not found or inaccessible.`);
+                if (!docSnap.exists() || docSnap.data().type === 'folder') {
+                    throw new Error(`File ID "${fileId}" not found, inaccessible, or is a folder.`);
                 }
                 const { filename, mimeType, type } = docSnap.data();
 
-                // Check if it's content that can be rendered as HTML
                 if (mimeType !== 'text/html' && type !== 'text') {
                      throw new Error(`File type ${mimeType} cannot be safely rendered as executable HTML.`);
                 }
 
-                // 2. Fetch and reconstruct the full Base64 content
                 const fullBase64Content = await fetchContentAndReconstruct(fileId);
                 let contentToDisplay;
                 try {
-                    // Content is base64-encoded plain text (HTML code)
                     contentToDisplay = atob(fullBase64Content); 
                 } catch (e) {
-                    contentToDisplay = fullBase64Content; // Fallback
+                    contentToDisplay = fullBase64Content;
                 }
                 
-                // 3. Render the HTML
                 document.title = `PREVIEW: ${filename}`;
                 
-                // Overwrite the entire document content to render and execute the saved HTML
                 document.open();
                 document.write(contentToDisplay);
                 document.close();
@@ -520,8 +701,14 @@
 
         /** Loads content, reconstructs it, and populates the preview modal. */
         const loadContentAndOpenModal = async (docId, filename, mimeType, itemType, elementToUpdate = null) => {
+            if (itemType === 'folder') {
+                 // Folders don't have content to preview in the modal, they navigate
+                 navigateToFolder(docId);
+                 return;
+            }
+            
+            // UI state while loading
             const isTextType = mimeType.includes('text/') || mimeType.includes('application/json');
-            // Check if it originated as a text paste or is explicitly a text/html file
             const canViewHtml = itemType === 'text' || mimeType.includes('text/html'); 
             
             if (elementToUpdate) {
@@ -556,10 +743,13 @@
                 <a id="modal-download-btn" href="#" download class="px-4 py-2 text-sm font-medium rounded-lg text-teal-600 border border-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
                     Download File
                 </a>
+                 <button id="modal-rename-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-yellow-600 border border-yellow-600 bg-yellow-50 hover:bg-yellow-100 transition-colors">
+                    Rename
+                </button>
                 <button id="modal-share-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
                     Copy Share Link
                 </button>
-                <a id="modal-raw-link-btn" href="${rawLink}" target="_blank" class="px-4 py-2 text-sm font-medium rounded-lg text-yellow-700 border border-yellow-700 hover:bg-yellow-50 transition-colors">
+                <a id="modal-raw-link-btn" href="${rawLink}" target="_blank" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 border border-gray-300 hover:bg-gray-100 transition-colors">
                     Open Raw Content
                 </a>
                 <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
@@ -570,6 +760,13 @@
             const modalDownloadBtnFinal = document.getElementById('modal-download-btn');
             const modalCopyBtnFinal = document.getElementById('modal-copy-btn');
             const modalShareBtnFinal = document.getElementById('modal-share-btn');
+            const modalRenameBtnFinal = document.getElementById('modal-rename-btn');
+            
+            // Set up rename button for modal
+            modalRenameBtnFinal.onclick = () => {
+                closeModal(); // Close current modal before opening rename modal
+                renameContent(docId, filename, itemType);
+            };
 
             try {
                 const fullContent = await fetchContentAndReconstruct(docId);
@@ -679,7 +876,6 @@
                     const textContent = document.getElementById('paste-text').value.trim();
                     if (!textContent) throw new Error("Text content cannot be empty.");
                     
-                    // Base64 encode text content before saving to keep it consistent with files
                     const base64Content = btoa(textContent);
 
                     data = {
@@ -718,6 +914,62 @@
             }
         };
 
+        const handleCreateFolder = async () => {
+            // Using modal for input instead of window.prompt
+            const folderName = await new Promise(resolve => {
+                const modal = document.getElementById('content-modal');
+                const title = document.getElementById('modal-title');
+                const content = document.getElementById('modal-content-preview');
+                const footer = modal.querySelector('.p-4.border-t');
+
+                title.textContent = 'Create New Folder';
+                content.innerHTML = `
+                    <p class="mb-2">Enter the name for your new folder:</p>
+                    <input id="folder-name-input" type="text" placeholder="e.g., 'Projects' or 'Shared Docs'"
+                           class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                `;
+                document.getElementById('modal-file-info').textContent = '';
+                document.getElementById('modal-media-container').classList.add('hidden');
+                
+                footer.innerHTML = `
+                    <button id="cancel-folder-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors">
+                        Cancel
+                    </button>
+                    <button id="confirm-folder-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                        Create Folder
+                    </button>
+                `;
+                openModal();
+                document.getElementById('folder-name-input').focus();
+
+                document.getElementById('cancel-folder-btn').onclick = () => { closeModal(); resolve(null); };
+                document.getElementById('confirm-folder-btn').onclick = () => { 
+                    const input = document.getElementById('folder-name-input').value.trim();
+                    closeModal(); 
+                    resolve(input); 
+                };
+            });
+            
+            if (!folderName) return;
+
+            try {
+                const filesCollectionRef = getUserCollectionRef();
+                await addDoc(filesCollectionRef, {
+                    type: 'folder',
+                    filename: folderName,
+                    mimeType: 'folder/directory',
+                    isChunked: false,
+                    userId: userId,
+                    createdAt: Date.now(),
+                    folderId: currentFolderId
+                });
+                showMessage('save-message', `Folder '${folderName}' created successfully!`);
+            } catch (error) {
+                console.error("Create Folder Error:", error);
+                showMessage('save-message', `Failed to create folder: ${error.message}`, true);
+            }
+        };
+
         const toggleSaveButton = () => {
             const saveBtn = document.getElementById('save-btn');
             const isTextTab = currentUploadType === 'text';
@@ -730,7 +982,6 @@
                     shouldBeDisabled = false;
                 }
             } else { 
-                // For file uploads, the button is enabled once the tab is selected
                 shouldBeDisabled = false; 
             }
 
@@ -747,21 +998,26 @@
         /** Renders a single item card for the list. */
         const renderItemCard = (item) => {
             const formattedDate = new Date(item.createdAt).toLocaleString();
-            const typeLabel = item.type === 'text' ? 'Paste' : 'File';
-            const typeColor = item.type === 'text' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700';
             
+            // Item Type Styling and Labels
+            const isFolder = item.type === 'folder';
+            const typeLabel = isFolder ? 'Folder' : (item.type === 'text' ? 'Paste' : 'File');
+            const typeColor = isFolder ? 'bg-blue-100 text-blue-700' : (item.type === 'text' ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700');
+            const cardClass = isFolder ? 'folder-card' : '';
+            
+            // Links
             const standardLink = `${window.location.origin}${window.location.pathname}?fileid=${item.id}`;
             const rawLink = `${window.location.origin}${window.location.pathname}?raw=${item.id}`; 
             const htmlLink = `${window.location.origin}${window.location.pathname}?html=${item.id}`; 
-            
             const isHtmlOrText = item.type === 'text' || item.mimeType.includes('text/html');
 
             const card = document.createElement('div');
-            card.className = 'bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between';
+            card.className = `bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between ${cardClass}`;
             card.innerHTML = `
                 <div>
                     <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-lg font-semibold text-gray-900 break-words max-w-[80%]">
+                        <h3 class="text-lg font-semibold text-gray-900 break-words max-w-[80%] flex items-center">
+                            ${isFolder ? `<svg class="w-5 h-5 mr-2 text-blue-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path></svg>` : ''}
                             ${item.filename}
                         </h3>
                         <span class="text-xs font-medium px-2 py-1 rounded-full whitespace-nowrap ${typeColor}">
@@ -772,8 +1028,7 @@
                         Saved: ${formattedDate}
                     </p>
                     <div class="text-xs text-gray-400 mb-2 flex justify-between items-center">
-                        <span>${item.isChunked ? '<span class="text-orange-600 font-semibold">LARGE (Chunked)</span>' : 'Small Content'}</span>
-                        <!-- Feature: Copy ID Button -->
+                        <span>${isFolder ? 'Folder ID' : (item.isChunked ? '<span class="text-orange-600 font-semibold">LARGE (Chunked)</span>' : 'Small Content')}</span>
                         <button class="copy-id-btn text-xs text-indigo-400 hover:text-indigo-600 transition-colors"
                             data-id="${item.id}">
                             Copy ID
@@ -781,36 +1036,64 @@
                     </div>
                 </div>
 
-                <!-- Feature: Improved Action Bar -->
+                <!-- Action Bar -->
                 <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
-                    <button class="load-content-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
-                        data-id="${item.id}" 
-                        data-filename="${item.filename}"
-                        data-mimetype="${item.mimeType}"
-                        data-type="${item.type}"> <!-- Pass item.type -->
-                        View / Copy
-                    </button>
-                    <!-- Link to open the file directly via URL (standard modal view) -->
-                    <a href="${standardLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="Open in new window">
-                        Open Link
-                    </a>
-                    ${isHtmlOrText ? `
-                        <!-- NEW: Open HTML Link Button -->
+                    ${isFolder ? `
+                        <button class="load-folder-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                            data-id="${item.id}">
+                            Open Folder
+                        </button>
+                    ` : `
+                        <button class="load-content-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                            data-id="${item.id}" 
+                            data-filename="${item.filename}"
+                            data-mimetype="${item.mimeType}"
+                            data-type="${item.type}">
+                            View / Copy
+                        </button>
+                    `}
+                    ${!isFolder && isHtmlOrText ? `
                         <a href="${htmlLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-fuchsia-600 bg-fuchsia-100 hover:bg-fuchsia-200 transition-colors" title="Open and execute as functional HTML">
                             View HTML
                         </a>
                     ` : ''}
+                    <button class="rename-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-yellow-600 bg-yellow-50 hover:bg-yellow-100 transition-colors"
+                        data-id="${item.id}" 
+                        data-filename="${item.filename}"
+                        data-type="${typeLabel}">
+                        Rename
+                    </button>
                     <button class="delete-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
                         data-id="${item.id}" 
-                        data-filename="${item.filename}">
+                        data-filename="${item.filename}"
+                        data-type="${item.type}">
                         Delete
                     </button>
                 </div>
             `;
 
             // Attach event listeners after rendering the static part
-            card.querySelector('.delete-btn').addEventListener('click', () => {
-                deleteContent(item.id, item.filename);
+
+            // Folder Navigation
+            if (isFolder) {
+                card.querySelector('.load-folder-btn').addEventListener('click', (e) => {
+                    navigateToFolder(e.target.dataset.id);
+                });
+            } else {
+                const loadBtn = card.querySelector('.load-content-btn');
+                loadBtn.addEventListener('click', async () => {
+                    loadContentAndOpenModal(item.id, item.filename, item.mimeType, item.type, loadBtn);
+                });
+            }
+
+            // Delete Handler
+            card.querySelector('.delete-btn').addEventListener('click', (e) => {
+                deleteContent(item.id, e.target.dataset.filename, e.target.dataset.type);
+            });
+            
+            // Rename Handler
+            card.querySelector('.rename-btn').addEventListener('click', (e) => {
+                renameContent(e.target.dataset.id, e.target.dataset.filename, e.target.dataset.type);
             });
 
             // Copy ID Handler
@@ -819,32 +1102,41 @@
                 copyTextToClipboard(id, e.target);
             });
 
-            const loadBtn = card.querySelector('.load-content-btn');
-            loadBtn.addEventListener('click', async () => {
-                // Pass the item type now
-                loadContentAndOpenModal(item.id, item.filename, item.mimeType, item.type, loadBtn);
-            });
-
             return card;
         };
 
-        /** Renders the full list of items based on current filter. */
+        /** Renders the full list of items based on current folder, filter, and search. */
         const renderItemList = (items) => {
             const listContainer = document.getElementById('item-list');
             const emptyState = document.getElementById('empty-state');
             
-            const filteredItems = items.filter(item => {
-                if (currentFilter === 'all') return true;
-                return item.type === currentFilter;
+            const filteredItems = items
+                .filter(item => {
+                    // Filter by Type
+                    if (currentFilter !== 'all' && item.type !== currentFilter) return false;
+                    
+                    // Filter by Search Term (case-insensitive on filename)
+                    if (currentSearchTerm && !item.filename.toLowerCase().includes(currentSearchTerm.toLowerCase())) return false;
+
+                    return true;
+                });
+
+            // Put folders first in the list
+            filteredItems.sort((a, b) => {
+                if (a.type === 'folder' && b.type !== 'folder') return -1;
+                if (a.type !== 'folder' && b.type === 'folder') return 1;
+                // Otherwise sort by creation date (descending)
+                return b.createdAt - a.createdAt; 
             });
+
 
             document.getElementById('item-count').textContent = filteredItems.length;
 
             listContainer.innerHTML = '';
             if (filteredItems.length === 0) {
                 const message = items.length === 0 
-                    ? "You have no saved items yet. Use the form above to store your first paste or file!"
-                    : "No items match the current filter selection.";
+                    ? "This folder is empty. Use the form above to store your first paste or file, or create a new folder!"
+                    : "No items match the current filter/search selection.";
                 emptyState.textContent = message;
                 listContainer.appendChild(emptyState);
             } else {
@@ -889,19 +1181,16 @@
         /** Checks the URL for a file ID and loads it if present. */
         const loadFromUrlIfPresent = async () => {
             const { fileId, isRaw, isHtml } = getFileParamsFromUrl();
-            
-            // We must be authenticated to fetch data
+            loadFolderIdFromUrl(); // Always load folder from URL
+
             if (!userId) {
                 if (fileId) {
-                    // If a fileId is present but user isn't logged in, we wait for sign-in or show error later.
-                    // For now, only return if no fileId is present.
                     return; 
                 }
                 return;
             }
 
             if (fileId) {
-                // If it's a RAW request, we bypass the main UI rendering
                 if (isRaw) {
                     document.getElementById('app').classList.add('hidden');
                     document.body.classList.remove('bg-gray-50');
@@ -912,7 +1201,6 @@
                     return; 
                 } 
                 
-                // If it's an HTML execution request (NEW FEATURE)
                 if (isHtml) {
                     document.getElementById('app').classList.add('hidden');
                     document.body.classList.remove('bg-gray-50');
@@ -922,7 +1210,7 @@
                     return; 
                 }
                 
-                // Otherwise, load in the modal (standard ?fileid)
+                // standard ?fileid loading
                 try {
                     const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                     const docSnap = await getDoc(docRef);
@@ -945,7 +1233,7 @@
             const authContainer = document.getElementById('auth-container');
             const mainApp = document.getElementById('main-app');
             const authStatus = document.getElementById('auth-status');
-            const { isRaw, isHtml } = getFileParamsFromUrl(); // Destructure new isHtml
+            const { isRaw, isHtml } = getFileParamsFromUrl(); 
 
             if (user) {
                 userId = user.uid;
@@ -958,29 +1246,25 @@
                 `;
                 document.getElementById('signout-btn').addEventListener('click', handleSignOut);
                 
-                // Only show main app UI if not in raw OR html mode
                 if (!isRaw && !isHtml) {
                     authContainer.classList.add('hidden');
                     mainApp.classList.remove('hidden');
                     attachDataListener();
                 }
 
-                // Load URL content regardless of mode, as long as user is authenticated
                 loadFromUrlIfPresent(); 
 
             } else {
-                // Not signed in
                 userId = null;
                 authStatus.textContent = 'Please sign in to access your vault.';
                 
-                // If in raw or html mode, keep the main UI hidden until an error is displayed
                 if (!isRaw && !isHtml) {
                     authContainer.classList.remove('hidden');
                     mainApp.classList.add('hidden');
                 }
                 savedItems = []; 
                 renderItemList([]); 
-                loadFromUrlIfPresent(); // Attempt to load to display an error if fileId is present but auth is missing
+                loadFromUrlIfPresent(); 
             }
         };
 
@@ -1047,8 +1331,15 @@
 
             try {
                 const filesCollectionRef = getUserCollectionRef();
-                // Note: orderBy is used for sorting in the list view. 
-                const q = query(filesCollectionRef, orderBy("createdAt", "desc"));
+                const folderIdToQuery = loadFolderIdFromUrl();
+                
+                // Query items where folderId matches the current folderId
+                // We use orderBy("type", "asc") to ensure folders (type:'folder') appear first.
+                const q = query(filesCollectionRef, 
+                    where("folderId", "==", folderIdToQuery),
+                    orderBy("type", "asc"), 
+                    orderBy("createdAt", "desc")
+                );
 
                 unsubscribeData = onSnapshot(q, (snapshot) => {
                     const fetchedItems = [];
@@ -1070,25 +1361,34 @@
         // --- INITIALIZATION ---
         
         window.onload = () => {
-            // Check for URL modes right away
             const { isRaw, isHtml } = getFileParamsFromUrl();
             
             if (isRaw || isHtml) {
-                // If in RAW or HTML mode, hide main UI components immediately
                 document.getElementById('app')?.classList.add('hidden');
                 document.body.classList.remove('bg-gray-50');
                 document.body.classList.add('bg-black');
             } else {
-                // Normal mode: Render form fields and UI listeners
                 renderFormFields();
+                
+                // Tab and Form Listeners
                 document.querySelectorAll('.tab-btn').forEach(btn => {
                     btn.addEventListener('click', handleTabClick);
                 });
                 document.getElementById('content-form').addEventListener('submit', handleFormSubmit);
+
+                // New Folder and Search/Filter Listeners
+                document.getElementById('create-folder-btn').addEventListener('click', handleCreateFolder);
+
                 document.getElementById('filter-type').addEventListener('change', (e) => {
                     currentFilter = e.target.value;
                     renderItemList(savedItems);
                 });
+                
+                document.getElementById('search-input').addEventListener('input', (e) => {
+                    currentSearchTerm = e.target.value.trim();
+                    renderItemList(savedItems);
+                });
+
                 document.addEventListener('change', (e) => {
                     if (e.target.id === 'file-upload' && e.target.files.length > 0) {
                         const file = e.target.files[0];
@@ -1097,6 +1397,12 @@
                         const sizeColor = file.size > CHUNK_SIZE * 0.9 ? 'text-orange-500 font-bold' : 'text-gray-500';
                         infoEl.innerHTML = `Selected: <strong>${file.name}</strong> (${sizeInKB} KB). <span class="${sizeColor}">Storage limit per chunk is ${Math.round(CHUNK_SIZE / 1024)} KB.</span>`;
                     }
+                });
+                
+                // Handle back/forward navigation affecting the folder URL
+                window.addEventListener('popstate', () => {
+                    loadFolderIdFromUrl();
+                    attachDataListener();
                 });
             }
 
