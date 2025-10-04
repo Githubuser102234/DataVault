@@ -36,6 +36,7 @@
     </style>
 </head>
 <body class="bg-gray-50 font-sans min-h-screen">
+    <!-- Main application container. Hidden in raw mode. -->
     <div id="app" class="max-w-4xl mx-auto p-4 sm:p-8">
         <!-- Header -->
         <div id="main-header" class="p-4 bg-white border-b border-gray-200 shadow-md rounded-t-xl">
@@ -156,17 +157,7 @@
                 <div id="modal-file-info" class="mt-4 text-sm text-gray-600"></div>
             </div>
             <div class="p-4 border-t border-gray-200 flex justify-end gap-3">
-                <!-- NEW: Download Button -->
-                <a id="modal-download-btn" href="#" download class="px-4 py-2 text-sm font-medium rounded-lg text-teal-600 border border-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
-                    Download File
-                </a>
-
-                <button id="modal-share-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
-                    Copy Share Link
-                </button>
-                <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
-                    Copy Raw Content
-                </button>
+                <!-- Buttons are dynamically inserted/re-added here by loadContentAndOpenModal -->
             </div>
         </div>
     </div>
@@ -232,6 +223,7 @@
 
         // --- UTILITY FUNCTIONS ---
 
+        /** Converts a File object to its Base64 content and MIME type. */
         const fileToBase64 = (file) => {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -244,9 +236,11 @@
             });
         };
 
+        /** Copies text to the clipboard and provides visual feedback. */
         const copyTextToClipboard = (text, buttonElement) => {
             const originalText = buttonElement.textContent;
             try {
+                // Use a temporary textarea for broad compatibility
                 const textarea = document.createElement('textarea');
                 textarea.value = text;
                 textarea.style.position = 'fixed';
@@ -268,6 +262,7 @@
             }
         };
 
+        /** Displays a temporary message in a specific UI element. */
         const showMessage = (elementId, message, isError = false) => {
             const el = document.getElementById(elementId);
             el.textContent = message;
@@ -286,8 +281,9 @@
                 // Clean up URL parameter when closing the modal, without reloading the page
                 if (window.history.replaceState) {
                     const url = new URL(window.location.href);
-                    if (url.searchParams.has('fileid')) {
+                    if (url.searchParams.has('fileid') || url.searchParams.has('raw')) {
                         url.searchParams.delete('fileid');
+                        url.searchParams.delete('raw');
                         window.history.replaceState(null, '', url.toString());
                     }
                 }
@@ -304,12 +300,14 @@
 
         // --- FIRESTORE DATA CHUNKING AND ASSEMBLY LOGIC ---
 
+        /** Gets the Firestore collection reference for the current user's files. */
         const getUserCollectionRef = () => {
             if (!userId) throw new Error("User not authenticated.");
             // Updated to use the static GITHUB_APP_ID
             return collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`);
         };
 
+        /** Saves content, splitting into chunks if necessary. */
         const saveContent = async (data) => {
             const content = data.content;
             const isLarge = content.length > CHUNK_SIZE;
@@ -338,11 +336,14 @@
             return docRef.id;
         };
 
+        /** Fetches all chunks and reconstructs the full Base64 content. */
         const fetchContentAndReconstruct = async (docId) => {
             // Updated to use the static GITHUB_APP_ID
             const chunksRef = collection(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files/${docId}/chunks`);
             
-            const q = query(chunksRef, orderBy("index"));
+            // NOTE: orderBy is used here because the 'index' field is expected to be present on the client.
+            // In a production environment, this might require a composite index or careful query planning.
+            const q = query(chunksRef, orderBy("index")); 
             const chunkSnapshot = await getDocs(q);
 
             const chunks = [];
@@ -352,10 +353,15 @@
 
             if (chunks.length === 0) throw new Error("Content chunks not found or inaccessible.");
 
-            const fullContent = chunks.map(c => c.content).join('');
+            const fullContent = chunks
+                .sort((a, b) => a.index - b.index) // Ensure correct order client-side, just in case
+                .map(c => c.content)
+                .join('');
+                
             return fullContent;
         };
         
+        /** Shows a confirmation modal and deletes the item and all its chunks on confirmation. */
         const deleteContent = async (docId, filename) => {
             // Using custom modal instead of window.confirm
             const confirmDelete = await new Promise(resolve => {
@@ -369,6 +375,7 @@
                 document.getElementById('modal-file-info').textContent = '';
                 document.getElementById('modal-media-container').classList.add('hidden');
                 
+                // Set up temporary footer for confirmation
                 footer.innerHTML = `
                     <button id="cancel-delete-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors">
                         Cancel
@@ -405,8 +412,9 @@
             }
         };
 
-        // --- NEW: RAW CONTENT RENDERING ---
+        // --- RAW CONTENT RENDERING (for ?raw={id} URL) ---
 
+        /** Renders the content directly to the body for raw viewing. */
         const renderRawContent = async (fileId) => {
             document.body.innerHTML = 'Loading RAW Content...';
             document.body.classList.add('raw-mode');
@@ -417,7 +425,7 @@
                 const docRef = doc(db, `artifacts/${GITHUB_APP_ID}/users/${userId}/files`, fileId);
                 const docSnap = await getDoc(docRef);
                 if (!docSnap.exists()) {
-                    throw new Error(`File ID "${fileId}" not found for this user.`);
+                    throw new Error(`File ID "${fileId}" not found or inaccessible.`);
                 }
                 const { filename, mimeType, type } = docSnap.data();
 
@@ -425,20 +433,20 @@
                 const fullContent = await fetchContentAndReconstruct(fileId);
 
                 // 3. Determine if content should be base64-decoded
-                // Files are often saved as base64 but can be decoded to view if they are plain text
-                const isText = type === 'text' || mimeType.includes('text/plain');
+                const isText = type === 'text' || mimeType.includes('text/plain') || mimeType.includes('text/html') || mimeType.includes('application/json');
                 let contentToDisplay;
 
                 if (isText) {
                     try {
-                        contentToDisplay = atob(fullContent); // Try decoding for text/code
+                        // Decode base64 to plain text for pastes
+                        contentToDisplay = atob(fullContent); 
                     } catch (e) {
-                        contentToDisplay = fullContent; // Fallback to raw base64 if decoding fails
+                        contentToDisplay = fullContent; // Fallback
                     }
                 } else {
+                    // For binary files (images, videos), show the raw base64 string
                     contentToDisplay = fullContent;
                 }
-
 
                 // 4. Update the page title and body content
                 document.title = `RAW: ${filename}`;
@@ -455,8 +463,9 @@
 
         // --- CONTENT LOADING AND MODAL RENDERING ---
 
+        /** Loads content, reconstructs it, and populates the preview modal. */
         const loadContentAndOpenModal = async (docId, filename, mimeType, elementToUpdate = null) => {
-            const isText = mimeType.includes('text/plain');
+            const isTextType = mimeType.includes('text/') || mimeType.includes('application/json');
             
             if (elementToUpdate) {
                 elementToUpdate.textContent = 'Loading...';
@@ -467,9 +476,6 @@
             const modalTitle = document.getElementById('modal-title');
             const modalPreview = document.getElementById('modal-content-preview');
             const modalInfo = document.getElementById('modal-file-info');
-            const modalCopyBtn = document.getElementById('modal-copy-btn');
-            const modalShareBtn = document.getElementById('modal-share-btn');
-            const modalDownloadBtn = document.getElementById('modal-download-btn');
             const mediaContainer = document.getElementById('modal-media-container');
 
             modalTitle.textContent = filename;
@@ -478,7 +484,10 @@
             mediaContainer.innerHTML = '';
             mediaContainer.classList.add('hidden');
 
-            // Reset modal footer to original state (View/Copy/Download)
+            // Reset modal footer to original state (View/Copy/Download/Raw Link)
+            const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${docId}`;
+            const rawLink = `${window.location.origin}${window.location.pathname}?raw=${docId}`;
+
             const footer = document.getElementById('content-modal').querySelector('.p-4.border-t');
             footer.innerHTML = `
                 <a id="modal-download-btn" href="#" download class="px-4 py-2 text-sm font-medium rounded-lg text-teal-600 border border-teal-600 bg-teal-50 hover:bg-teal-100 transition-colors">
@@ -487,6 +496,9 @@
                 <button id="modal-share-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-indigo-600 border border-indigo-600 hover:bg-indigo-50 transition-colors">
                     Copy Share Link
                 </button>
+                <a id="modal-raw-link-btn" href="${rawLink}" target="_blank" class="px-4 py-2 text-sm font-medium rounded-lg text-yellow-700 border border-yellow-700 hover:bg-yellow-50 transition-colors">
+                    Open Raw Link
+                </a>
                 <button id="modal-copy-btn" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
                     Copy Raw Content
                 </button>
@@ -500,7 +512,16 @@
                 const fullContent = await fetchContentAndReconstruct(docId);
                 const dataUri = `data:${mimeType};base64,${fullContent}`;
                 
-                const contentToDisplay = isText ? atob(fullContent) : fullContent;
+                let contentToDisplay;
+                if (isTextType) {
+                    try {
+                        contentToDisplay = atob(fullContent);
+                    } catch (e) {
+                        contentToDisplay = fullContent; // Fallback to raw base64 if decoding fails
+                    }
+                } else {
+                    contentToDisplay = fullContent;
+                }
 
                 // --- Media Rendering (Image/Video/Audio) ---
                 if (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
@@ -533,18 +554,17 @@
                     ${fullContent.length > CHUNK_SIZE ? '<span class="text-orange-600 font-semibold">(Stored in Chunks)</span>' : ''}
                 `;
 
-                // 4. Set up Download Link (NEW)
+                // 4. Set up Download Link
                 modalDownloadBtnFinal.href = dataUri;
                 modalDownloadBtnFinal.download = filename;
 
                 // 5. Set up copy handlers
-                modalCopyBtnFinal.textContent = isText ? 'Copy Text/Code' : 'Copy Base64';
+                modalCopyBtnFinal.textContent = isTextType ? 'Copy Text/Code' : 'Copy Base64';
                 modalCopyBtnFinal.onclick = () => {
                     copyTextToClipboard(contentToDisplay, modalCopyBtnFinal);
                 };
 
                 // 6. Set up Share link copy
-                const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${docId}`;
                 modalShareBtnFinal.onclick = () => {
                     copyTextToClipboard(shareLink, modalShareBtnFinal);
                 };
@@ -647,11 +667,8 @@
                     shouldBeDisabled = false;
                 }
             } else { 
-                // For files, we assume the file input is ready to select a file, but we keep it enabled
-                // when a file is selected. Since we can't reliably check file selection on form change 
-                // when handling submission, we rely on the form submit handler to validate, 
-                // but we enable the button once the form fields are rendered to prompt interaction.
-                // Simplified: always enabled for file tab since we clear input on success.
+                // For file uploads, the button is enabled once the tab is selected
+                // as the file validation occurs on submission.
                 shouldBeDisabled = false; 
             }
 
@@ -665,12 +682,14 @@
             }
         };
 
+        /** Renders a single item card for the list. */
         const renderItemCard = (item) => {
             const formattedDate = new Date(item.createdAt).toLocaleString();
             const typeLabel = item.type === 'text' ? 'Paste' : 'File';
             const typeColor = item.type === 'text' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700';
             
-            const shareLink = `${window.location.origin}${window.location.pathname}?fileid=${item.id}`;
+            const standardLink = `${window.location.origin}${window.location.pathname}?fileid=${item.id}`;
+            const rawLink = `${window.location.origin}${window.location.pathname}?raw=${item.id}`; // NEW RAW LINK
 
             const card = document.createElement('div');
             card.className = 'bg-white p-4 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between';
@@ -689,7 +708,7 @@
                     </p>
                     <div class="text-xs text-gray-400 mb-2 flex justify-between items-center">
                         <span>${item.isChunked ? '<span class="text-orange-600 font-semibold">LARGE (Chunked)</span>' : 'Small Content'}</span>
-                        <!-- NEW: Copy ID Button -->
+                        <!-- Feature: Copy ID Button -->
                         <button class="copy-id-btn text-xs text-indigo-400 hover:text-indigo-600 transition-colors"
                             data-id="${item.id}">
                             Copy ID
@@ -697,6 +716,7 @@
                     </div>
                 </div>
 
+                <!-- Feature: Improved Action Bar -->
                 <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
                     <button class="load-content-btn flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                         data-id="${item.id}" 
@@ -704,9 +724,13 @@
                         data-mimetype="${item.mimeType}">
                         View / Copy
                     </button>
-                    <!-- Link to open the file directly via URL -->
-                    <a href="${shareLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="Open in new window">
+                    <!-- Link to open the file directly via URL (standard modal view) -->
+                    <a href="${standardLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="Open in new window">
                         Open Link
+                    </a>
+                    <!-- NEW: Open Raw Link Button -->
+                    <a href="${rawLink}" target="_blank" class="flex-1 min-w-[100px] text-center px-3 py-1.5 text-sm font-medium rounded-lg text-yellow-700 bg-yellow-100 hover:bg-yellow-200 transition-colors" title="Open raw content link">
+                        Raw Link
                     </a>
                     <button class="delete-btn w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
                         data-id="${item.id}" 
@@ -721,14 +745,13 @@
                 deleteContent(item.id, item.filename);
             });
 
-            // NEW: Copy ID Handler
+            // Copy ID Handler
             card.querySelector('.copy-id-btn').addEventListener('click', (e) => {
                 const id = e.target.dataset.id;
                 copyTextToClipboard(id, e.target);
             });
 
             const loadBtn = card.querySelector('.load-content-btn');
-            
             loadBtn.addEventListener('click', async () => {
                 loadContentAndOpenModal(item.id, item.filename, item.mimeType, loadBtn);
             });
@@ -736,6 +759,7 @@
             return card;
         };
 
+        /** Renders the full list of items based on current filter. */
         const renderItemList = (items) => {
             const listContainer = document.getElementById('item-list');
             const emptyState = document.getElementById('empty-state');
@@ -793,13 +817,19 @@
 
         // --- AUTHENTICATION FLOWS ---
 
+        /** Checks the URL for a file ID and loads it if present. */
         const loadFromUrlIfPresent = async () => {
             const { fileId, isRaw } = getFileParamsFromUrl();
-            if (fileId) {
+            if (fileId && userId) { // Only attempt to load if logged in
+                
                 // If it's a RAW request, we bypass the main UI rendering
                 if (isRaw) {
-                    // Hide main UI elements immediately
+                    // Hide main UI elements immediately and render raw content
                     document.getElementById('app').classList.add('hidden');
+                    document.body.classList.remove('bg-gray-50');
+                    document.body.classList.add('bg-black');
+                    document.getElementById('main-header').classList.add('hidden');
+                    document.getElementById('auth-container').classList.add('hidden');
                     renderRawContent(fileId);
                     return; 
                 }
@@ -823,10 +853,12 @@
             }
         }
 
+        /** Handles the Firebase authentication state change. */
         const handleAuthStateChanged = (user) => {
             const authContainer = document.getElementById('auth-container');
             const mainApp = document.getElementById('main-app');
             const authStatus = document.getElementById('auth-status');
+            const { isRaw } = getFileParamsFromUrl();
 
             if (user) {
                 userId = user.uid;
@@ -839,23 +871,34 @@
                 `;
                 document.getElementById('signout-btn').addEventListener('click', handleSignOut);
                 
-                authContainer.classList.add('hidden');
-                mainApp.classList.remove('hidden');
-                attachDataListener();
-                
-                // Check URL for fileid or raw and load content instantly
+                // Only show main app UI if not in raw mode
+                if (!isRaw) {
+                    authContainer.classList.add('hidden');
+                    mainApp.classList.remove('hidden');
+                    attachDataListener();
+                }
+
+                // Load URL content regardless of raw mode, as long as user is authenticated
                 loadFromUrlIfPresent(); 
 
             } else {
+                // Not signed in
                 userId = null;
                 authStatus.textContent = 'Please sign in to access your vault.';
-                authContainer.classList.remove('hidden');
-                mainApp.classList.add('hidden');
+                
+                // If in raw mode, we still need to show the error later in loadFromUrlIfPresent, 
+                // but the initial UI remains hidden.
+                if (!isRaw) {
+                    authContainer.classList.remove('hidden');
+                    mainApp.classList.add('hidden');
+                }
                 savedItems = []; 
                 renderItemList([]); 
+                loadFromUrlIfPresent(); // Attempt to load to display an error if fileId is present
             }
         };
 
+        /** Sign in with Google Popup. */
         const handleGoogleSignIn = async () => {
             document.getElementById('auth-message').classList.add('hidden');
             try {
@@ -869,6 +912,7 @@
             }
         };
 
+        /** Handles email/password sign-in or sign-up. */
         const handleEmailAuth = async (isSignUp) => {
             document.getElementById('auth-message').classList.add('hidden');
             const email = document.getElementById('auth-email').value;
@@ -896,6 +940,7 @@
             }
         };
         
+        /** Signs the user out. */
         const handleSignOut = async () => {
             try {
                 await signOut(auth);
@@ -907,6 +952,7 @@
         // --- MAIN DATA LISTENER ---
         let unsubscribeData = null;
 
+        /** Attaches the Firestore real-time listener to the user's files. */
         const attachDataListener = () => {
             if (unsubscribeData) {
                 unsubscribeData();
@@ -915,6 +961,7 @@
 
             try {
                 const filesCollectionRef = getUserCollectionRef();
+                // Note: orderBy is used for sorting in the list view. 
                 const q = query(filesCollectionRef, orderBy("createdAt", "desc"));
 
                 unsubscribeData = onSnapshot(q, (snapshot) => {
@@ -940,10 +987,10 @@
             // Check for RAW mode right away before rendering the main app structure
             const { isRaw } = getFileParamsFromUrl();
             if (isRaw) {
-                // If in RAW mode, hide main UI components and proceed with auth listener
-                document.getElementById('main-header').classList.add('hidden');
-                document.getElementById('app').classList.remove('max-w-4xl', 'mx-auto', 'p-4', 'sm:p-8');
-                document.getElementById('app').classList.add('p-0');
+                // If in RAW mode, hide main UI components
+                document.getElementById('app').classList.add('hidden');
+                document.body.classList.remove('bg-gray-50');
+                document.body.classList.add('bg-black');
             } else {
                 // Normal mode: Render form fields and UI listeners
                 renderFormFields();
